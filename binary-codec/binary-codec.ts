@@ -132,7 +132,7 @@ export class BaseBinaryCodec {
 }
 
 /**
- * Built-in binary primitive field definitions.
+ * Built-in binary primitive field definitions for multiplayer games.
  */
 export class BinaryPrimitives {
   /** Unsigned 8-bit integer */
@@ -142,14 +142,39 @@ export class BinaryPrimitives {
     read: (dv, o) => dv.getUint8(o),
   };
 
-  /**
-   * Unsigned 16-bit integer (big-endian).
-   * Endianness is explicit and stable.
-   */
+  /** Unsigned 16-bit integer (big-endian) */
   static readonly u16: Field<number> = {
     size: 2,
     write: (dv, o, v) => dv.setUint16(o, v, false),
     read: (dv, o) => dv.getUint16(o, false),
+  };
+
+  /** Unsigned 32-bit integer (big-endian) */
+  static readonly u32: Field<number> = {
+    size: 4,
+    write: (dv, o, v) => dv.setUint32(o, v, false),
+    read: (dv, o) => dv.getUint32(o, false),
+  };
+
+  /** Signed 8-bit integer */
+  static readonly i8: Field<number> = {
+    size: 1,
+    write: (dv, o, v) => dv.setInt8(o, v),
+    read: (dv, o) => dv.getInt8(o),
+  };
+
+  /** Signed 16-bit integer (big-endian) */
+  static readonly i16: Field<number> = {
+    size: 2,
+    write: (dv, o, v) => dv.setInt16(o, v, false),
+    read: (dv, o) => dv.getInt16(o, false),
+  };
+
+  /** Signed 32-bit integer (big-endian) */
+  static readonly i32: Field<number> = {
+    size: 4,
+    write: (dv, o, v) => dv.setInt32(o, v, false),
+    read: (dv, o) => dv.getInt32(o, false),
   };
 
   /** 32-bit floating point number (IEEE 754, big-endian) */
@@ -157,6 +182,93 @@ export class BinaryPrimitives {
     size: 4,
     write: (dv, o, v) => dv.setFloat32(o, v, false),
     read: (dv, o) => dv.getFloat32(o, false),
+  };
+
+  /** 64-bit floating point number (double, big-endian) */
+  static readonly f64: Field<number> = {
+    size: 8,
+    write: (dv, o, v) => dv.setFloat64(o, v, false),
+    read: (dv, o) => dv.getFloat64(o, false),
+  };
+
+  /** Boolean stored as 1 byte (0 = false, 1 = true) */
+  static readonly bool: Field<boolean> = {
+    size: 1,
+    write: (dv, o, v) => dv.setUint8(o, v ? 1 : 0),
+    read: (dv, o) => dv.getUint8(o) !== 0,
+  };
+
+  /**
+   * String field with UTF-8 encoding and 2-byte length prefix.
+   * @param maxLength Maximum number of bytes allowed
+   */
+  static string(maxLength: number): Field<string> {
+    return {
+      size: maxLength + 2,
+      write(dv, o, v) {
+        const encoder = new TextEncoder();
+        const bytes = encoder.encode(v);
+        if (bytes.length > maxLength)
+          throw new RangeError(`String too long, max ${maxLength} bytes`);
+        dv.setUint16(o, bytes.length, false);
+        for (let i = 0; i < bytes.length; i++) dv.setUint8(o + 2 + i, bytes[i]);
+        for (let i = bytes.length; i < maxLength; i++) dv.setUint8(o + 2 + i, 0);
+      },
+      read(dv, o) {
+        const length = dv.getUint16(o, false);
+        const bytes = new Uint8Array(length);
+        for (let i = 0; i < length; i++) bytes[i] = dv.getUint8(o + 2 + i);
+        return new TextDecoder().decode(bytes);
+      },
+    };
+  }
+
+  /** 2D vector of f32 (x, y) */
+  static readonly vec2: Field<{ x: number; y: number }> = {
+    size: 8,
+    write(dv, o, v) {
+      dv.setFloat32(o, v.x, false);
+      dv.setFloat32(o + 4, v.y, false);
+    },
+    read(dv, o) {
+      return { x: dv.getFloat32(o, false), y: dv.getFloat32(o + 4, false) };
+    },
+  };
+
+  /** 3D vector of f32 (x, y, z) */
+  static readonly vec3: Field<{ x: number; y: number; z: number }> = {
+    size: 12,
+    write(dv, o, v) {
+      dv.setFloat32(o, v.x, false);
+      dv.setFloat32(o + 4, v.y, false);
+      dv.setFloat32(o + 8, v.z, false);
+    },
+    read(dv, o) {
+      return {
+        x: dv.getFloat32(o, false),
+        y: dv.getFloat32(o + 4, false),
+        z: dv.getFloat32(o + 8, false),
+      };
+    },
+  };
+
+  /** RGBA color packed as 4 u8 bytes */
+  static readonly color: Field<{ r: number; g: number; b: number; a: number }> = {
+    size: 4,
+    write(dv, o, v) {
+      dv.setUint8(o, v.r);
+      dv.setUint8(o + 1, v.g);
+      dv.setUint8(o + 2, v.b);
+      dv.setUint8(o + 3, v.a);
+    },
+    read(dv, o) {
+      return {
+        r: dv.getUint8(o),
+        g: dv.getUint8(o + 1),
+        b: dv.getUint8(o + 2),
+        a: dv.getUint8(o + 3),
+      };
+    },
   };
 }
 
