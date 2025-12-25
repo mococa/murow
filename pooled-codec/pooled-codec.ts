@@ -180,3 +180,51 @@ export class PooledEncoder<T extends object> {
     this.pool.release(buf);
   }
 }
+
+/**
+ * Combined pooled encoder and decoder for a single schema.
+ * Provides a convenient wrapper around PooledEncoder and PooledDecoder.
+ * @template T Type of object to encode/decode.
+ */
+export class PooledCodec<T> {
+  /** Pooled encoder for the schema */
+  encoder: PooledEncoder<T>;
+
+  /** Pooled decoder for the schema */
+  decoder: PooledDecoder<T>;
+
+  /**
+   * @param schema Schema describing the object structure.
+   * @param initial Initial object used as a template for pooling decoded objects.
+   */
+  constructor(schema: Schema<T>, initial: T) {
+    this.encoder = new PooledEncoder(schema);
+    this.decoder = new PooledDecoder(schema, initial);
+  }
+
+  /**
+   * Encode an object into a pooled buffer.
+   * @param {T} data Object to encode.
+   * @returns {Uint8Array} Encoded buffer.
+   */
+  encode(data: T) {
+    return this.encoder.encode(data);
+  }
+
+  /**
+   * Decode a buffer into a pooled object.
+   * @param {Uint8Array} buf Buffer to decode.
+   * @returns {T} Decoded object.
+   */
+  decode(buf: Uint8Array) {
+    return this.decoder.decode(buf);
+  }
+
+  /**
+   * Release a decoded object back to the pool.
+   * @param {T} obj Object to release.
+   */
+  release(obj: T) {
+    this.decoder.release(obj);
+  }
+}
