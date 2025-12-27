@@ -126,15 +126,15 @@ describe("IntentRegistry", () => {
       registry.register(1, new MockCodec());
       const original: MockIntent = { kind: 1, tick: 100, value: 42 };
       const buf = registry.encode(original);
-      const decoded = registry.decode(1, buf);
+      const decoded = registry.decode(buf);
 
       expect(decoded).toEqual(original);
     });
 
     it("should throw error when decoding with unregistered kind", () => {
-      const buf = new Uint8Array([1, 0, 0, 0, 100, 0, 0, 0, 42]);
-      expect(() => registry.decode(1, buf)).toThrow(
-        "No codec registered for intent kind 1"
+      const buf = new Uint8Array([99, 0, 0, 0, 100, 0, 0, 0, 42]); // kind=99 not registered
+      expect(() => registry.decode(buf)).toThrow(
+        "No codec registered for intent kind 99"
       );
     });
 
@@ -148,8 +148,8 @@ describe("IntentRegistry", () => {
       const buf1 = registry.encode(intent1);
       const buf2 = registry.encode(intent2);
 
-      const decoded1 = registry.decode(1, buf1);
-      const decoded2 = registry.decode(2, buf2);
+      const decoded1 = registry.decode(buf1);
+      const decoded2 = registry.decode(buf2);
 
       expect(decoded1).toEqual(intent1);
       expect(decoded2).toEqual(intent2);
@@ -217,7 +217,7 @@ describe("IntentRegistry", () => {
 
       const original: MockIntent = { kind: 1, tick: 12345, value: 98765 };
       const buf = registry.encode(original);
-      const decoded = registry.decode(1, buf);
+      const decoded = registry.decode(buf);
 
       expect(decoded).toEqual(original);
     });
@@ -229,7 +229,7 @@ describe("IntentRegistry", () => {
 
       for (let i = 0; i < 10; i++) {
         const buf = registry.encode(original);
-        const decoded = registry.decode(1, buf);
+        const decoded = registry.decode(buf);
         expect(decoded).toEqual(original);
       }
     });

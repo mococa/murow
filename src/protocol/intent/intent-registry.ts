@@ -33,7 +33,7 @@ export interface Codec<T> {
  *
  * // Encode/decode
  * const buf = registry.encode(intent);
- * const decoded = registry.decode(1, buf);
+ * const decoded = registry.decode(buf);
  * ```
  */
 export class IntentRegistry {
@@ -63,8 +63,29 @@ export class IntentRegistry {
 
   /**
    * Decode binary data into an intent.
+   * Extracts the kind from the first byte of the buffer.
    */
-  decode(kind: number, buf: Uint8Array): Intent {
+  decode(buf: Uint8Array): Intent {
+    if (buf.byteLength === 0) {
+      throw new Error('Cannot decode empty buffer');
+    }
+
+    // Extract kind from first byte (all intent codecs must encode kind as u8 in first byte)
+    const kind = buf[0];
+
+    const codec = this.codecs.get(kind);
+    if (!codec) {
+      throw new Error(`No codec registered for intent kind ${kind}`);
+    }
+    return codec.decode(buf);
+  }
+
+  /**
+   * Decode binary data into an intent when kind is already known.
+   * Useful for testing or when kind is transmitted separately.
+   * @deprecated Use decode(buf) instead for standard intent decoding
+   */
+  decodeWithKnownKind(kind: number, buf: Uint8Array): Intent {
     const codec = this.codecs.get(kind);
     if (!codec) {
       throw new Error(`No codec registered for intent kind ${kind}`);

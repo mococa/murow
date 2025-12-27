@@ -206,8 +206,8 @@ describe("defineIntent", () => {
       const attackEncoded = registry.encode(attack);
 
       // Decode using registry
-      const moveDecoded = registry.decode(MoveIntent.kind, moveEncoded);
-      const attackDecoded = registry.decode(AttackIntent.kind, attackEncoded);
+      const moveDecoded = registry.decode(moveEncoded);
+      const attackDecoded = registry.decode(attackEncoded);
 
       expect(moveDecoded.kind).toBe(1);
       expect(moveDecoded.tick).toBe(100);

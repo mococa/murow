@@ -75,8 +75,12 @@ class IntentCodec<T extends Intent> implements Codec<T> {
  * stay in sync by deriving the type from the schema definition.
  *
  * The `kind` and `tick` fields are automatically added to the schema:
- * - `kind`: u8 codec (always)
+ * - `kind`: u8 codec (always FIRST byte - required for IntentRegistry.decode)
  * - `tick`: u32 codec (default, can be overridden by including it in your schema)
+ *
+ * IMPORTANT: If you use PooledCodec directly instead of defineIntent(), you MUST
+ * ensure `kind: BinaryPrimitives.u8` is the FIRST field in your schema, or
+ * IntentRegistry.decode() will fail.
  *
  * @template K The intent kind (numeric literal)
  * @template S The schema type

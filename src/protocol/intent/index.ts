@@ -56,7 +56,7 @@
  *
  * // 6. Encode/decode
  * const buf = registry.encode(move);
- * const decoded = registry.decode(IntentKind.Move, buf);
+ * const decoded = registry.decode(buf);
  * ```
  *
  * @example Manual definition (legacy)
@@ -84,7 +84,7 @@
  *
  * // 3. Encode/decode
  * const buf = registry.encode(intent);
- * const decoded = registry.decode(1, buf);
+ * const decoded = registry.decode(buf);
  * ```
  */
 
