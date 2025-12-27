@@ -42,3 +42,4 @@
 export type { Snapshot } from "./snapshot";
 export { applySnapshot } from "./snapshot";
 export { SnapshotCodec } from "./snapshot-codec";
+export { SnapshotRegistry } from "./snapshot-registry";

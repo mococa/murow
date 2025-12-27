@@ -196,6 +196,76 @@ applySnapshot(state, snapshot);
 - **Arrays**: Replaced entirely
 - **Primitives**: Overwritten
 
+## Efficient Partial Updates with SnapshotRegistry
+
+For games with many state fields, use `SnapshotRegistry` to send only specific update types:
+
+```ts
+import { SnapshotRegistry } from "./protocol/snapshot";
+import { PooledCodec } from "./core/pooled-codec";
+import { BinaryCodec } from "./core/binary-codec";
+
+// Define separate update types
+interface PlayerUpdate {
+  players: Record<number, { x: number; y: number }>;
+}
+
+interface ScoreUpdate {
+  score: number;
+}
+
+interface ProjectileUpdate {
+  projectiles: Array<{ id: number; x: number; y: number }>;
+}
+
+type GameUpdate = PlayerUpdate | ScoreUpdate | ProjectileUpdate;
+
+// Create registry
+const registry = new SnapshotRegistry<GameUpdate>();
+
+// Register codecs for each update type
+registry.register("players", new PooledCodec({
+  players: // schema
+}));
+
+registry.register("score", new PooledCodec({
+  score: BinaryCodec.u32
+}));
+
+registry.register("projectiles", new PooledCodec({
+  projectiles: // array schema
+}));
+
+// Server: Send only what changed
+if (playersChanged) {
+  const buf = registry.encode("players", {
+    tick: 100,
+    updates: { players: { 1: { x: 5, y: 10 } } }
+  });
+  socket.send(buf);
+}
+
+if (scoreChanged) {
+  const buf = registry.encode("score", {
+    tick: 100,
+    updates: { score: 50 }
+  });
+  socket.send(buf);
+}
+
+// Client: Decode and apply
+socket.on("snapshot", (buf: Uint8Array) => {
+  const { type, snapshot } = registry.decode(buf);
+  applySnapshot(clientState, snapshot);
+});
+```
+
+**Benefits:**
+- ✅ Only encode fields that changed (true partial updates)
+- ✅ No bandwidth wasted on nil/empty values
+- ✅ Type ID embedded in message (1 byte overhead)
+- ✅ Works with arrays, Records, primitives
+
 ## Multiple Intents
 
 You can have as many intent types as needed:
