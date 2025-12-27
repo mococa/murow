@@ -1,6 +1,0 @@
-{
-  "name": "generate-id",
-  "version": "1.0.0",
-  "main": "./generate-id.ts",
-  "license": "MIT"
-}

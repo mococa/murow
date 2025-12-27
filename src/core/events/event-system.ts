@@ -55,7 +55,7 @@ export class EventSystem<EventTuple extends [string, unknown][]> {
         name: EventName,
         callback: Callback<EventMapFromTuple<EventTuple>[EventName]>
     ): void {
-        const event = this.callbacks.get(name);
+        const event = this.callbacks.get(name) as Set<Callback<EventMapFromTuple<EventTuple>[EventName]>> | undefined;
         if (!event) return console.warn(`Event "${name}" does not exist.`);
 
         event.add(callback);
@@ -110,7 +110,7 @@ export class EventSystem<EventTuple extends [string, unknown][]> {
         name: EventName,
         callback: Callback<EventMapFromTuple<EventTuple>[EventName]>
     ): void {
-        const event = this.callbacks.get(name);
+        const event = this.callbacks.get(name) as Set<Callback<EventMapFromTuple<EventTuple>[EventName]>> | undefined;
         if (!event) return console.warn(`Event "${name}" does not exist.`);
 
         event.delete(callback);

@@ -1,6 +1,0 @@
-{
-  "name": "fixed-ticker",
-  "version": "1.0.0",
-  "main": "./fixed-ticker.ts",
-  "license": "MIT"
-}

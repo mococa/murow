@@ -1,4 +1,4 @@
-import { BinaryCodec, Schema } from "../binary-codec/binary-codec.ts";
+import { BinaryCodec, Schema } from "../binary-codec";
 
 /**
  * Generic object pool for reusing objects and minimizing allocations.
@@ -10,7 +10,7 @@ export class ObjectPool<T> {
   /**
    * @param factory Function to create a new instance when the pool is empty.
    */
-  constructor(private factory: () => T) {}
+  constructor(private factory: () => T) { }
 
   /**
    * Acquire an object from the pool, or create a new one if empty.
@@ -85,7 +85,7 @@ export class PooledDecoder<T extends object> {
       } else if ("decode" in field) {
         target[key] = field.decode(buf);
       } else {
-        BinaryCodec.decodeInto({ [key]: field }, buf, target);
+        BinaryCodec.decodeInto({ [key]: field } as Schema<T>, buf, target);
       }
     }
   }
@@ -195,7 +195,7 @@ export class PooledEncoder<T extends object> {
  * Provides a convenient wrapper around PooledEncoder and PooledDecoder.
  * @template T Type of object to encode/decode.
  */
-export class PooledCodec<T> {
+export class PooledCodec<T extends object> {
   /** Pooled encoder for the schema */
   encoder: PooledEncoder<T>;
 

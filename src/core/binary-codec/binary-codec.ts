@@ -106,7 +106,7 @@ export class BaseBinaryCodec {
    * @param target Target object to mutate
    * @returns The mutated target object
    */
-  protected static decodeInto<T extends object>(
+  static decodeInto<T extends object>(
     schema: Schema<T>,
     buf: Uint8Array,
     target: T
