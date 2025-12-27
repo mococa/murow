@@ -11,6 +11,7 @@
  * - Pooled codecs for zero-allocation networking
  * - Prediction system for client-side prediction
  * - Protocol layer for networked multiplayer games
+ * - Transport-agnostic networking layer (client/server abstractions)
  */
 
 // Core utilities
@@ -18,3 +19,6 @@ export * from "./core";
 
 // Protocol layer for networking
 export * from "./protocol";
+
+// Networking layer (client/server abstractions)
+export * from "./net";

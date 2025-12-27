@@ -27,7 +27,7 @@
     "build:types": "tsc --project tsconfig.json",
     "dev": "npm run build:js -- --watch",
     "prepublishOnly": "npm run build",
-    "test": "bun test ./src/**/**/*.test.ts"
+    "test": "bun test ./src"
   },
   "keywords": [
     "game-engine",
