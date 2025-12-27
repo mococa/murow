@@ -93,6 +93,11 @@ export class SnapshotRegistry<T> {
   /**
    * Encode a snapshot with a specific update type.
    * Format: [typeId: u8][tick: u32][updates: encoded by codec]
+   *
+   * Efficiently writes to a single buffer:
+   * - PooledCodec writes updates to its pooled buffer
+   * - We allocate ONE final buffer for [typeId + tick + updates]
+   * - Direct memory copy, no intermediate allocations
    */
   encode<U extends Partial<T>>(type: string, snapshot: Snapshot<U>): Uint8Array {
     const codec = this.codecs.get(type);
@@ -102,17 +107,19 @@ export class SnapshotRegistry<T> {
       throw new Error(`No codec registered for snapshot type "${type}"`);
     }
 
-    // Encode updates using the specific codec
+    // Encode updates using the specific codec (acquires from pool)
     const updatesBytes = codec.encode(snapshot.updates);
+
+    // Allocate single buffer for complete message
     const buf = new Uint8Array(1 + 4 + updatesBytes.length);
 
-    // Encode type ID (1 byte)
+    // Write type ID (1 byte)
     buf[0] = typeId;
 
-    // Encode tick (4 bytes, little-endian)
+    // Write tick (4 bytes, little-endian)
     new DataView(buf.buffer).setUint32(1, snapshot.tick, true);
 
-    // Encode updates
+    // Write updates (direct copy)
     buf.set(updatesBytes, 5);
 
     return buf;

@@ -207,7 +207,7 @@ import { BinaryCodec } from "./core/binary-codec";
 
 // Define separate update types
 interface PlayerUpdate {
-  players: Record<number, { x: number; y: number }>;
+  players: Array<{ entityId: number; x: number; y: number }>;
 }
 
 interface ScoreUpdate {
@@ -240,7 +240,7 @@ registry.register("projectiles", new PooledCodec({
 if (playersChanged) {
   const buf = registry.encode("players", {
     tick: 100,
-    updates: { players: { 1: { x: 5, y: 10 } } }
+    updates: { players: [{ entityId: 1, x: 5, y: 10 }] }
   });
   socket.send(buf);
 }
