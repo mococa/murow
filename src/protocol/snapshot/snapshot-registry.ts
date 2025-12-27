@@ -6,6 +6,8 @@ import type { Snapshot } from "./snapshot";
 interface Codec<T> {
   encode(value: T): Uint8Array;
   decode(buf: Uint8Array): T;
+  calculateSize?(value: T): number;
+  encodeInto?(value: T, buffer: Uint8Array, offset: number): number;
 }
 
 /**
@@ -35,7 +37,7 @@ interface Codec<T> {
  * ```ts
  * import { SnapshotRegistry } from './protocol/snapshot';
  * import { PooledCodec } from './core/pooled-codec';
- * import { BinaryCodec } from './core/binary-codec';
+ * import { BinaryPrimitives } from './core/binary-codec';
  *
  * // Define different update types
  * interface PlayerUpdate {
@@ -51,11 +53,15 @@ interface Codec<T> {
  *
  * // Register codecs for each update type
  * registry.register('players', new PooledCodec({
- *   players: // schema
+ *   players: PooledCodec.array({
+ *     entityId: BinaryPrimitives.u32,
+ *     x: BinaryPrimitives.f32,
+ *     y: BinaryPrimitives.f32,
+ *   })
  * }));
  *
  * registry.register('score', new PooledCodec({
- *   score: BinaryCodec.u32
+ *   score: BinaryPrimitives.u32
  * }));
  *
  * // Server: Encode specific update type
@@ -69,7 +75,7 @@ interface Codec<T> {
  * applySnapshot(state, snapshot);
  * ```
  */
-export class SnapshotRegistry<T> {
+export class SnapshotRegistry<T extends Object = {}> {
   private codecs = new Map<string, Codec<any>>();
   private typeIds = new Map<string, number>();
   private idToType = new Map<number, string>();
@@ -94,10 +100,12 @@ export class SnapshotRegistry<T> {
    * Encode a snapshot with a specific update type.
    * Format: [typeId: u8][tick: u32][updates: encoded by codec]
    *
-   * Efficiently writes to a single buffer:
-   * - PooledCodec writes updates to its pooled buffer
-   * - We allocate ONE final buffer for [typeId + tick + updates]
-   * - Direct memory copy, no intermediate allocations
+   * Zero-copy encoding path:
+   * - Calculate total size needed
+   * - Allocate ONE final buffer for [typeId + tick + updates]
+   * - Write directly into buffer using encodeInto (no intermediate allocations)
+   *
+   * Falls back to legacy encode() method if codec doesn't support encodeInto.
    */
   encode<U extends Partial<T>>(type: string, snapshot: Snapshot<U>): Uint8Array {
     const codec = this.codecs.get(type);
@@ -107,19 +115,30 @@ export class SnapshotRegistry<T> {
       throw new Error(`No codec registered for snapshot type "${type}"`);
     }
 
-    // Encode updates using the specific codec (acquires from pool)
-    const updatesBytes = codec.encode(snapshot.updates);
+    // Use zero-copy path if available
+    if (codec.calculateSize && codec.encodeInto) {
+      // Calculate total size
+      const updatesSize = codec.calculateSize(snapshot.updates);
+      const buf = new Uint8Array(5 + updatesSize);
 
-    // Allocate single buffer for complete message
+      // Write type ID (1 byte)
+      buf[0] = typeId;
+
+      // Write tick (4 bytes, little-endian)
+      new DataView(buf.buffer).setUint32(1, snapshot.tick, true);
+
+      // Write updates directly into buffer (ZERO COPY!)
+      codec.encodeInto(snapshot.updates, buf, 5);
+
+      return buf;
+    }
+
+    // Fallback to legacy path for backward compatibility
+    const updatesBytes = codec.encode(snapshot.updates);
     const buf = new Uint8Array(1 + 4 + updatesBytes.length);
 
-    // Write type ID (1 byte)
     buf[0] = typeId;
-
-    // Write tick (4 bytes, little-endian)
     new DataView(buf.buffer).setUint32(1, snapshot.tick, true);
-
-    // Write updates (direct copy)
     buf.set(updatesBytes, 5);
 
     return buf;
@@ -128,7 +147,7 @@ export class SnapshotRegistry<T> {
   /**
    * Decode a snapshot and return both the type and the snapshot.
    */
-  decode(buf: Uint8Array): { type: string; snapshot: Snapshot<Partial<T>> } {
+  decode<U extends Partial<T> = Partial<T>>(buf: Uint8Array): { type: string; snapshot: Snapshot<U> } {
     // Decode type ID (first byte)
     const typeId = buf[0];
     const type = this.idToType.get(typeId);
@@ -147,7 +166,7 @@ export class SnapshotRegistry<T> {
 
     // Decode updates (remaining bytes)
     const updatesBytes = buf.subarray(5);
-    const updates = codec.decode(updatesBytes);
+    const updates = codec.decode(updatesBytes) as U;
 
     return { type, snapshot: { tick, updates } };
   }

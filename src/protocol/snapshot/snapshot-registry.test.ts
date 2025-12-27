@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect, beforeEach } from "bun:test";
 import { SnapshotRegistry } from "./snapshot-registry";
 import { Snapshot } from "./snapshot";
 
@@ -28,7 +28,7 @@ interface ProjectileUpdate {
   projectiles: Array<{ id: number; x: number; y: number }>;
 }
 
-type GameUpdate = PlayerUpdate | ScoreUpdate | ProjectileUpdate;
+type GameUpdate = PlayerUpdate & ScoreUpdate & ProjectileUpdate;
 
 describe("SnapshotRegistry", () => {
   let registry: SnapshotRegistry<GameUpdate>;
@@ -144,7 +144,7 @@ describe("SnapshotRegistry", () => {
       };
 
       const buf = registry.encode("players", original);
-      const { type, snapshot } = registry.decode(buf);
+      const { type, snapshot } = registry.decode<PlayerUpdate>(buf);
 
       expect(type).toBe("players");
       expect(snapshot.tick).toBe(100);
@@ -291,12 +291,20 @@ describe("SnapshotRegistry", () => {
       };
 
       const buf = registry.encode("players", snapshot);
-      const { type, snapshot: decoded } = registry.decode(buf);
+      const { type, snapshot: decoded } = registry.decode<GameUpdate>(buf);
+
+      if (('players' in decoded.updates)) {
+        decoded.updates.players!.forEach((p) => {
+          expect(typeof p.entityId).toBe("number");
+          expect(typeof p.x).toBe("number");
+          expect(typeof p.y).toBe("number");
+        });
+      }
 
       // Type narrowing based on type field
-      if (type === "players") {
-        expect(decoded.updates.players).toBeDefined();
-      }
+      expect(type).toBe("players");
+      expect(type in decoded.updates).toBeDefined();
+      expect(type in decoded.updates).toBe(true);
     });
   });
 });
