@@ -1,0 +1,20 @@
+# Source files
+src/
+
+# Config files
+tsconfig.json
+.gitignore
+
+# Development
+node_modules/
+.github/
+*.log
+*.lock
+bun.lock
+
+# Tests
+**/*.test.ts
+**/*.spec.ts
+
+# Documentation (optional - remove if you want to include README)
+# README.md

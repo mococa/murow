@@ -23,7 +23,7 @@
   ],
   "scripts": {
     "build": "npm run build:types && npm run build:js",
-    "build:js": "esbuild src/core/index.ts --bundle --outfile=dist/core.js --format=cjs --platform=neutral && esbuild src/core/index.ts --bundle --outfile=dist/core.esm.js --format=esm --platform=neutral",
+    "build:js": "esbuild src/core/index.ts --bundle --outfile=dist/core.js --format=cjs --platform=neutral --minify && esbuild src/core/index.ts --bundle --outfile=dist/core.esm.js --format=esm --platform=neutral --minify",
     "build:types": "tsc --project tsconfig.json",
     "dev": "npm run build:js -- --watch",
     "prepublishOnly": "npm run build",
