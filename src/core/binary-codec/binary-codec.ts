@@ -404,8 +404,26 @@ export class BinaryCodec extends BaseBinaryCodec {
   static readonly u8 = BinaryPrimitives.u8;
   /** Unsigned 16-bit integer field */
   static readonly u16 = BinaryPrimitives.u16;
+  /** Unsigned 32-bit integer field */
+  static readonly u32 = BinaryPrimitives.u32;
+  /** Signed 8-bit integer field */
+  static readonly i8 = BinaryPrimitives.i8;
+  /** Signed 16-bit integer field */
+  static readonly i16 = BinaryPrimitives.i16;
+  /** Signed 32-bit integer field */
+  static readonly i32 = BinaryPrimitives.i32;
   /** 32-bit floating point field */
   static readonly f32 = BinaryPrimitives.f32;
+  /** Boolean field */
+  static readonly bool = BinaryPrimitives.bool;
+  /** String field with length prefix */
+  static string = BinaryPrimitives.string;
+  /** 2D vector field */
+  static readonly vec2 = BinaryPrimitives.vec2;
+  /** 3D vector field */
+  static readonly vec3 = BinaryPrimitives.vec3;
+  /** RGBA color field */
+  static readonly color = BinaryPrimitives.color;
 
   /**
    * Encodes an object into a binary buffer.

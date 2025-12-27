@@ -12,79 +12,83 @@ That's it. No loops, no queues, no storage - just the codec layer.
 
 ## Quick Start
 
-### 1. Define Your Types
+### 1. Define Your Intent Kinds
 
 ```ts
-import { Intent, Snapshot } from "./protocol";
-
-interface GameState {
-  players: Record<number, { x: number; y: number; health: number }>;
-}
-
-interface MoveIntent extends Intent {
-  kind: 1;
-  tick: number;
-  dx: number;
-  dy: number;
-}
-
-interface ShootIntent extends Intent {
-  kind: 2;
-  tick: number;
-  targetId: number;
+// Define all your intent kinds in one place
+enum IntentKind {
+  Move = 1,
+  Shoot = 2,
+  Jump = 3,
 }
 ```
 
-### 2. Register Intent Codecs
+### 2. Define Intents with Type-Safe Schemas
+
+```ts
+import { defineIntent } from "./protocol/intent";
+import { BinaryCodec } from "./core/binary-codec";
+
+// kind and tick are added automatically!
+const MoveIntent = defineIntent({
+  kind: IntentKind.Move,
+  schema: {
+    dx: BinaryCodec.f32,
+    dy: BinaryCodec.f32,
+  }
+});
+
+const ShootIntent = defineIntent({
+  kind: IntentKind.Shoot,
+  schema: {
+    targetId: BinaryCodec.u32,
+  }
+});
+
+// Extract the types
+type MoveIntent = typeof MoveIntent.type;
+type ShootIntent = typeof ShootIntent.type;
+```
+
+### 3. Register Intent Codecs
 
 ```ts
 import { IntentRegistry } from "./protocol/intent";
-import { PooledCodec } from "./core/pooled-codec";
-import { BinaryCodec } from "./core/binary-codec";
 
 const registry = new IntentRegistry();
 
-// Register move intent
-registry.register(
-  1,
-  new PooledCodec({
-    kind: BinaryCodec.u8,
-    tick: BinaryCodec.u32,
-    dx: BinaryCodec.f32,
-    dy: BinaryCodec.f32,
-  })
-);
-
-// Register shoot intent
-registry.register(
-  2,
-  new PooledCodec({
-    kind: BinaryCodec.u8,
-    tick: BinaryCodec.u32,
-    targetId: BinaryCodec.u32,
-  })
-);
+// Register using auto-generated codecs
+registry.register(MoveIntent.kind, MoveIntent.codec);
+registry.register(ShootIntent.kind, ShootIntent.codec);
 ```
 
-### 3. Client: Encode & Send Intents
+### 4. Define Your Game State
+
+```ts
+interface GameState {
+  players: Record<number, { x: number; y: number; health: number }>;
+}
+```
+
+### 5. Client: Encode & Send Intents
 
 ```ts
 // Generate intent from input
 const intent: MoveIntent = {
-  kind: 1,
+  kind: IntentKind.Move,
   tick: currentTick,
   dx: input.x,
   dy: input.y,
 };
 
-// Encode using pooled codec (zero allocation)
+// Encode using auto-generated codec
 const buf = registry.encode(intent);
 
 // Send to server
 socket.send(buf);
 ```
 
-### 4. Server: Receive & Decode Intents
+### 6. Server: Receive & Decode Intents
 
 ```ts
 socket.on("data", (buf: Uint8Array) => {
@@ -99,7 +103,7 @@ socket.on("data", (buf: Uint8Array) => {
 });
 ```
 
-### 5. Server: Create & Send Snapshots
+### 7. Server: Create & Send Snapshots
 
 ```ts
 import { SnapshotCodec } from "./protocol/snapshot";
@@ -129,7 +133,7 @@ const buf = snapshotCodec.encode(snapshot);
 socket.send(buf);
 ```
 
-### 6. Client: Decode & Apply Snapshots
+### 8. Client: Decode & Apply Snapshots
 
 ```ts
 import { applySnapshot } from "./protocol/snapshot";
@@ -146,23 +150,66 @@ socket.on("snapshot", (buf: Uint8Array) => {
 });
 ```
 
-## Memory Efficiency
+## Type Safety Benefits
 
-The `PooledCodec` reuses buffers and objects:
+Using `defineIntent` with enums gives you:
 
+✅ **Single Source of Truth** - Type and schema defined together
+✅ **Zero Drift** - TypeScript type automatically matches binary schema
+✅ **Automatic Fields** - `kind` and `tick` added automatically
+✅ **Named Constants** - `IntentKind.Move` instead of magic numbers
+✅ **IDE Support** - Full autocomplete and refactoring
+✅ **Compile-time Safety** - Catch errors before runtime
+
+### Before (Manual)
 ```ts
-// Encoding - reuses Uint8Array from pool
-const buf1 = registry.encode(intent1); // Acquires from pool
-socket.send(buf1);
-// buf1 automatically released back to pool after use
+// Define interface
+interface MoveIntent extends Intent {
+  kind: 1;  // Can drift from registration
+  tick: number;
+  dx: number;
+  dy: number;
+}
 
-// Decoding - reuses objects from pool
-const intent = registry.decode(kind, buf); // Acquires from pool
-processIntent(intent);
-// intent automatically released back to pool
+// Define schema separately (can drift from interface!)
+registry.register(1, new PooledCodec({
+  kind: BinaryCodec.u8,
+  tick: BinaryCodec.u32,
+  dx: BinaryCodec.f32,
+  dy: BinaryCodec.f32,  // Wait, should this be f64?
+}));
 ```
 
-**Zero allocations** during gameplay = zero GC pauses.
+### After (defineIntent)
+```ts
+// Everything in one place - impossible to drift!
+const MoveIntent = defineIntent({
+  kind: IntentKind.Move,
+  schema: {
+    dx: BinaryCodec.f32,
+    dy: BinaryCodec.f32,
+  }
+});
+
+type MoveIntent = typeof MoveIntent.type;
+registry.register(MoveIntent.kind, MoveIntent.codec);
+```
+
+## Memory Efficiency
+
+The codecs are optimized for zero allocations:
+
+```ts
+// Encoding
+const buf = registry.encode(intent);
+socket.send(buf);
+
+// Decoding
+const decoded = registry.decode(kind, buf);
+processIntent(decoded);
+```
+
+**Efficient binary encoding** with minimal allocations.
 
 ## Snapshot Deep Merging
 
@@ -198,14 +245,16 @@ applySnapshot(state, snapshot);
 
 ## Efficient Partial Updates with SnapshotRegistry
 
-For games with many state fields, use `SnapshotRegistry` to send only specific update types:
+For games with many state fields, use `SnapshotRegistry` to send only specific update types.
+
+**Note:** Unlike intents (which use `defineIntent`), snapshots currently use manual codec definition with `PooledCodec`. A `defineSnapshot` helper may be added in the future for consistency.
 
 ```ts
 import { SnapshotRegistry } from "./protocol/snapshot";
 import { PooledCodec } from "./core/pooled-codec";
 import { BinaryCodec } from "./core/binary-codec";
 
-// Define separate update types
+// Define separate snapshot update types
 interface PlayerUpdate {
   players: Array<{ entityId: number; x: number; y: number }>;
 }
@@ -220,25 +269,31 @@ interface ProjectileUpdate {
 
 type GameUpdate = PlayerUpdate | ScoreUpdate | ProjectileUpdate;
 
-// Create registry
-const registry = new SnapshotRegistry<GameUpdate>();
+// Create registry for different snapshot types
+const snapshotRegistry = new SnapshotRegistry<GameUpdate>();
 
-// Register codecs for each update type
-registry.register("players", new PooledCodec({
-  players: // schema
+// Register codecs for each snapshot type
+// (Manual definition - no defineSnapshot helper yet)
+snapshotRegistry.register("players", new PooledCodec({
+  players: {
+    // Define your array schema here
+    // See PooledCodec documentation for array schemas
+  }
 }));
 
-registry.register("score", new PooledCodec({
+snapshotRegistry.register("score", new PooledCodec({
   score: BinaryCodec.u32
 }));
 
-registry.register("projectiles", new PooledCodec({
-  projectiles: // array schema
+snapshotRegistry.register("projectiles", new PooledCodec({
+  projectiles: {
+    // Define your array schema here
+  }
 }));
 
-// Server: Send only what changed
+// Server: Send only what changed (efficient!)
 if (playersChanged) {
-  const buf = registry.encode("players", {
+  const buf = snapshotRegistry.encode("players", {
     tick: 100,
     updates: { players: [{ entityId: 1, x: 5, y: 10 }] }
   });
@@ -246,7 +301,7 @@ if (playersChanged) {
 }
 
 if (scoreChanged) {
-  const buf = registry.encode("score", {
+  const buf = snapshotRegistry.encode("score", {
     tick: 100,
     updates: { score: 50 }
   });
@@ -255,7 +310,7 @@ if (scoreChanged) {
 
 // Client: Decode and apply
 socket.on("snapshot", (buf: Uint8Array) => {
-  const { type, snapshot } = registry.decode(buf);
+  const { type, snapshot } = snapshotRegistry.decode(buf);
   applySnapshot(clientState, snapshot);
 });
 ```
@@ -271,6 +326,7 @@ socket.on("snapshot", (buf: Uint8Array) => {
 You can have as many intent types as needed:
 
 ```ts
+// Define all your intent kinds in one enum
 enum IntentKind {
   Move = 1,
   Shoot = 2,
@@ -279,10 +335,26 @@ enum IntentKind {
   Chat = 5,
 }
 
-registry.register(IntentKind.Move, new PooledCodec(moveSchema));
-registry.register(IntentKind.Shoot, new PooledCodec(shootSchema));
-registry.register(IntentKind.Jump, new PooledCodec(jumpSchema));
-// ... etc
+// Define each intent with its schema
+const MoveIntent = defineIntent({
+  kind: IntentKind.Move,
+  schema: { dx: BinaryCodec.f32, dy: BinaryCodec.f32 }
+});
+
+const ShootIntent = defineIntent({
+  kind: IntentKind.Shoot,
+  schema: { targetId: BinaryCodec.u32 }
+});
+
+const JumpIntent = defineIntent({
+  kind: IntentKind.Jump,
+  schema: { height: BinaryCodec.f32 }
+});
+
+// Register all at once
+registry.register(MoveIntent.kind, MoveIntent.codec);
+registry.register(ShootIntent.kind, ShootIntent.codec);
+registry.register(JumpIntent.kind, JumpIntent.codec);
 ```
 
 ## What You Build Yourself
