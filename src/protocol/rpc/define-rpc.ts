@@ -108,6 +108,6 @@ export function defineRpc<S extends Record<string, any>>(
 	return {
 		method: definition.method,
 		codec,
-		_type: undefined as any as RpcType, // Phantom type for inference
+		type: undefined as any as RpcType, // Phantom type for inference
 	};
 }

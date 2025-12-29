@@ -13,7 +13,7 @@ describe("defineRpc", () => {
 				},
 			});
 
-			type MatchCountdown = typeof MatchCountdown._type;
+			type MatchCountdown = typeof MatchCountdown.type;
 
 			// Create an instance to verify type inference
 			const countdown: MatchCountdown = {
@@ -33,7 +33,7 @@ describe("defineRpc", () => {
 				},
 			});
 
-			type BuyItem = typeof BuyItem._type;
+			type BuyItem = typeof BuyItem.type;
 
 			const purchase: BuyItem = {
 				itemId: 'long_sword',
@@ -52,7 +52,7 @@ describe("defineRpc", () => {
 				schema: {},
 			});
 
-			type Ping = typeof Ping._type;
+			type Ping = typeof Ping.type;
 
 			const ping: Ping = {};
 
@@ -69,7 +69,7 @@ describe("defineRpc", () => {
 				},
 			});
 
-			type TestRpc = typeof TestRpc._type;
+			type TestRpc = typeof TestRpc.type;
 
 			const data: TestRpc = { value: 42 };
 			const encoded = TestRpc.codec.encode(data);
@@ -91,7 +91,7 @@ describe("defineRpc", () => {
 				},
 			});
 
-			type PlayerInfo = typeof PlayerInfo._type;
+			type PlayerInfo = typeof PlayerInfo.type;
 
 			const data: PlayerInfo = {
 				playerId: 12345,
@@ -120,7 +120,7 @@ describe("defineRpc", () => {
 				},
 			});
 
-			type Notification = typeof Notification._type;
+			type Notification = typeof Notification.type;
 
 			const registry = new RpcRegistry();
 			registry.register(Notification);

@@ -18,8 +18,8 @@ const AnotherRpc = defineRpc({
 	},
 });
 
-type MockRpcType = typeof MockRpc._type;
-type AnotherRpcType = typeof AnotherRpc._type;
+type MockRpcType = typeof MockRpc.type;
+type AnotherRpcType = typeof AnotherRpc.type;
 
 describe("RpcRegistry", () => {
 	let registry: RpcRegistry;

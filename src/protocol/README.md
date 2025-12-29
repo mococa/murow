@@ -398,8 +398,8 @@ const BuyItem = defineRpc({
   }
 });
 
-type MatchCountdown = typeof MatchCountdown._type;
-type BuyItem = typeof BuyItem._type;
+type MatchCountdown = typeof MatchCountdown.type;
+type BuyItem = typeof BuyItem.type;
 ```
 
 ### Register RPCs

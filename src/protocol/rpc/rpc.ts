@@ -33,5 +33,5 @@ export interface Rpc<T = unknown> {
 export interface DefinedRpc<TSchema extends Record<string, any>> {
 	method: string;
 	codec: RpcCodec<TSchema>;
-	_type?: TSchema; // Phantom type for inference
+	type: TSchema; // Phantom type for inference
 }
