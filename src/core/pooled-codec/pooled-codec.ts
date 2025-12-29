@@ -1,12 +1,17 @@
 import { BinaryCodec, Schema, Field } from "../binary-codec";
 
 /**
- * Type marker for array fields in schemas
+ * Type marker for array fields in schemas.
+ *
+ * ArrayField now implements both the Field interface (for use in schemas)
+ * and the Codec interface (for standalone use), making it versatile enough
+ * to be used directly with SnapshotRegistry or as a field in PooledCodec schemas.
  */
 export type ArrayField<T> = {
   __arrayType?: T[];
   encode(items: T[]): Uint8Array;
-  decode(buf: Uint8Array): { value: T[]; bytesRead: number };
+  decode(buf: Uint8Array): T[];
+  decodeField(buf: Uint8Array): { value: T[]; bytesRead: number };
   toNil(): T[];
   calculateSize(items: T[]): number;
   encodeInto(items: T[], buffer: Uint8Array, offset: number): number;
@@ -115,6 +120,11 @@ export class PooledDecoder<T extends object> {
       const field = (this.schema as any)[key];
       if ("decodeAll" in field) {
         const result = field.decodeAll(buf.subarray(offset));
+        target[key] = result.value;
+        offset += result.bytesRead;
+      } else if ("decodeField" in field) {
+        // Use decodeField for ArrayField (returns { value, bytesRead })
+        const result = field.decodeField(buf.subarray(offset));
         target[key] = result.value;
         offset += result.bytesRead;
       } else if ("decode" in field) {
@@ -451,7 +461,7 @@ export class PooledCodec<S extends Record<string, any>> {
         return result;
       },
 
-      decode(buf: Uint8Array): { value: U[]; bytesRead: number } {
+      decodeField(buf: Uint8Array): { value: U[]; bytesRead: number } {
         // Read array length directly from buffer
         const length = (buf[0] << 8) | buf[1];
 
@@ -480,6 +490,10 @@ export class PooledCodec<S extends Record<string, any>> {
         }
 
         return { value: items, bytesRead: offset };
+      },
+
+      decode(buf: Uint8Array): U[] {
+        return this.decodeField(buf).value;
       },
 
       toNil(): U[] {
