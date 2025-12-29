@@ -12,6 +12,7 @@
  * - Prediction system for client-side prediction
  * - Protocol layer for networked multiplayer games
  * - Transport-agnostic networking layer (client/server abstractions)
+ * - Entity Component System (ECS) for scalable game architecture
  */
 
 // Core utilities
@@ -22,3 +23,6 @@ export * from "./protocol";
 
 // Networking layer (client/server abstractions)
 export * from "./net";
+
+// Entity Component System
+export * from "./ecs";
