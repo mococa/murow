@@ -60,6 +60,9 @@ export class ClientNetwork<TSnapshots = unknown> {
 	/** Connection state */
 	private connected = false;
 
+	/** Last sent intent per kind (for change detection) */
+	private lastSentIntents = new Map<number, Intent>();
+
 	/** Rate limiting state */
 	private messageCount = 0;
 	private messageCountWindow = Date.now();
@@ -91,6 +94,54 @@ export class ClientNetwork<TSnapshots = unknown> {
 	/**
 	 * Send an intent to the server (type-safe)
 	 */
+	/**
+	 * Check if an intent has changed compared to the last sent intent of the same kind.
+	 * Useful for bandwidth optimization - only send intents when they actually change.
+	 *
+	 * @param intent The intent to check
+	 * @param compareFn Optional custom comparison function. If not provided, uses JSON.stringify.
+	 * @returns true if the intent is different from the last sent intent of this kind
+	 *
+	 * @example
+	 * ```ts
+	 * const moveIntent = { kind: IntentKind.Move, tick: 100, dx: 1, dy: 0 };
+	 *
+	 * // Only send if input changed
+	 * if (client.hasIntentChanged(moveIntent)) {
+	 *   client.sendIntent(moveIntent);
+	 * }
+	 *
+	 * // Custom comparison (more efficient than JSON.stringify)
+	 * if (client.hasIntentChanged(moveIntent, (last, current) =>
+	 *   last.dx !== current.dx || last.dy !== current.dy
+	 * )) {
+	 *   client.sendIntent(moveIntent);
+	 * }
+	 * ```
+	 */
+	hasIntentChanged<T extends Intent>(
+		intent: T,
+		compareFn?: (last: T, current: T) => boolean
+	): boolean {
+		const lastIntent = this.lastSentIntents.get(intent.kind) as T | undefined;
+
+		if (!lastIntent) {
+			return true; // First time sending this intent kind
+		}
+
+		if (compareFn) {
+			return compareFn(lastIntent, intent);
+		}
+
+		// Default comparison: stringify everything except tick
+		// eslint-disable-next-line @typescript-eslint/no-unused-vars
+		const { tick: _lastTick, ...lastData } = lastIntent;
+		// eslint-disable-next-line @typescript-eslint/no-unused-vars
+		const { tick: _currentTick, ...currentData } = intent;
+
+		return JSON.stringify(lastData) !== JSON.stringify(currentData);
+	}
+
 	sendIntent<T extends Intent>(intent: T): void {
 		if (!this.connected) {
 			this.log("Cannot send intent: not connected");
@@ -114,6 +165,9 @@ export class ClientNetwork<TSnapshots = unknown> {
 
 			// Send to server
 			this.transport.send(message);
+
+			// Track this intent for change detection (clone to avoid reference issues)
+			this.lastSentIntents.set(intent.kind, { ...intent });
 
 			this.log(`Sent intent (kind: ${intent.kind}, tick: ${intent.tick})`);
 		} catch (error) {
