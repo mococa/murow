@@ -18,8 +18,9 @@ Transport-agnostic networking layer for multiplayer games. Provides generic clie
   - Custom transports
 
 - **Type-Safe Protocol** - Integrates with `@mococa/protocol`:
-  - Intent encoding/decoding
-  - Snapshot encoding/decoding
+  - Intent encoding/decoding (client inputs)
+  - Snapshot encoding/decoding (state sync)
+  - RPC encoding/decoding (one-off events)
   - Binary serialization
 
 - **Connection Lifecycle** - Built-in handling for:
@@ -34,15 +35,21 @@ Transport-agnostic networking layer for multiplayer games. Provides generic clie
 │ Game Client │                    │ Game Server │
 └──────┬──────┘                    └──────┬──────┘
        │                                  │
-       │  Intents (MoveIntent, etc)       │
+       │  Intents (MoveIntent)            │
        ├─────────────────────────────────>│
        │                                  │
        │  Snapshots (GameState)           │
        │<─────────────────────────────────┤
        │                                  │
+       │  RPCs (BuyItem)                  │
+       ├─────────────────────────────────>│
+       │                                  │
+       │  RPCs (MatchCountdown)           │
+       │<─────────────────────────────────┤
+       │                                  │
        ▼                                  ▼
 ┌─────────────┐                    ┌─────────────┐
-│ ClientNetwork  │                    │ ServerNetwork  │
+│ ClientNetwork│                   │ServerNetwork│
 │   Class     │                    │   Class     │
 └──────┬──────┘                    └──────┬──────┘
        │                                  │
@@ -166,6 +173,74 @@ client.sendIntent({
   dy: 0.5
 });
 ```
+
+## RPCs (Remote Procedure Calls)
+
+For one-off events that don't fit intents (inputs) or snapshots (state sync), use RPCs. See [Protocol README](../protocol/README.md#rpcs-remote-procedure-calls) for full documentation.
+
+### Quick Example
+
+```typescript
+import { defineRpc, RpcRegistry } from '@mococa/gamedev-utils';
+
+// Define RPCs
+const MatchCountdown = defineRpc({
+  method: 'matchCountdown',
+  schema: {
+    secondsRemaining: BinaryCodec.u8,
+  }
+});
+
+const BuyItem = defineRpc({
+  method: 'buyItem',
+  schema: {
+    itemId: BinaryCodec.string(32),
+  }
+});
+
+// Register RPCs
+const rpcRegistry = new RpcRegistry();
+rpcRegistry.register(MatchCountdown);
+rpcRegistry.register(BuyItem);
+
+// Add to client/server config
+const client = new ClientNetwork({
+  transport,
+  intentRegistry,
+  snapshotRegistry,
+  rpcRegistry, // ← Optional
+});
+
+// Client: Send RPC to server
+client.sendRpc(BuyItem, { itemId: 'long_sword' });
+
+// Client: Receive RPC from server
+client.onRpc(MatchCountdown, (rpc) => {
+  showCountdownUI(rpc.secondsRemaining);
+});
+
+// Server: Receive RPC from client
+server.onRpc(BuyItem, (peerId, rpc) => {
+  handlePurchase(peerId, rpc.itemId);
+});
+
+// Server: Send RPC to specific client
+server.sendRpc(peerId, MatchCountdown, { secondsRemaining: 10 });
+
+// Server: Broadcast RPC to all clients
+server.sendRpcBroadcast(MatchCountdown, { secondsRemaining: 3 });
+```
+
+**When to use:**
+- ✅ Match lifecycle events (countdown, pause, end)
+- ✅ Meta-game events (achievements, notifications)
+- ✅ Chat messages
+- ✅ UI feedback (purchase confirmations, errors)
+
+**When NOT to use:**
+- ❌ Game state (use Snapshots)
+- ❌ Player inputs (use Intents)
+- ❌ Anything late joiners need to know
 
 ## Per-Peer Snapshot Registries
 

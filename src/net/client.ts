@@ -2,6 +2,8 @@ import type { IntentRegistry } from "../protocol/intent/intent-registry";
 import type { SnapshotRegistry } from "../protocol/snapshot/snapshot-registry";
 import type { Snapshot } from "../protocol/snapshot/snapshot";
 import type { Intent } from "../protocol/intent/intent";
+import type { RpcRegistry } from "../protocol/rpc/rpc-registry";
+import type { DefinedRpc } from "../protocol/rpc/rpc";
 import { MessageType, type TransportAdapter, type NetworkConfig } from "./types";
 
 /**
@@ -16,6 +18,9 @@ export interface ClientNetworkConfig<TSnapshots> {
 
 	/** Snapshot registry for decoding server snapshots */
 	snapshotRegistry: SnapshotRegistry<TSnapshots>;
+
+	/** RPC registry for bidirectional remote procedure calls (optional) */
+	rpcRegistry?: RpcRegistry;
 
 	/** Network configuration */
 	config?: NetworkConfig;
@@ -47,10 +52,14 @@ export class ClientNetwork<TSnapshots = unknown> {
 	private transport: TransportAdapter;
 	private intentRegistry: IntentRegistry;
 	private snapshotRegistry: SnapshotRegistry<TSnapshots>;
+	private rpcRegistry?: RpcRegistry;
 	private config: Required<NetworkConfig>;
 
 	/** Snapshot type handlers: type -> handler[] (supports multiple handlers) */
 	private snapshotHandlers = new Map<string, Array<(snapshot: Snapshot<any>) => void>>();
+
+	/** RPC method handlers: method -> handler[] (supports multiple handlers) */
+	private rpcHandlers = new Map<string, Array<(data: any) => void>>();
 
 	/** Connection lifecycle handlers */
 	private connectHandlers: Array<() => void> = [];
@@ -77,6 +86,7 @@ export class ClientNetwork<TSnapshots = unknown> {
 		this.transport = config.transport;
 		this.intentRegistry = config.intentRegistry;
 		this.snapshotRegistry = config.snapshotRegistry;
+		this.rpcRegistry = config.rpcRegistry;
 		this.config = {
 			maxMessageSize: config.config?.maxMessageSize ?? 65536,
 			debug: config.config?.debug ?? false,
@@ -197,6 +207,105 @@ export class ClientNetwork<TSnapshots = unknown> {
 			const handlers = this.snapshotHandlers.get(type);
 			if (handlers) {
 				const index = handlers.indexOf(handler as (snapshot: Snapshot<any>) => void);
+				if (index > -1) {
+					handlers.splice(index, 1);
+				}
+			}
+		};
+	}
+
+	/**
+	 * Send an RPC to the server (type-safe)
+	 *
+	 * @template TSchema The RPC data type
+	 * @param rpc The RPC definition created by defineRpc()
+	 * @param data The RPC data to send
+	 *
+	 * @example
+	 * ```ts
+	 * const BuyItem = defineRpc({
+	 *   method: 'buyItem',
+	 *   schema: { itemId: BinaryCodec.string(32) }
+	 * });
+	 *
+	 * client.sendRpc(BuyItem, { itemId: 'long_sword' });
+	 * ```
+	 */
+	sendRpc<TSchema extends Record<string, any>>(rpc: DefinedRpc<TSchema>, data: TSchema): void {
+		if (!this.rpcRegistry) {
+			throw new Error('RpcRegistry not configured. Pass rpcRegistry to ClientNetworkConfig.');
+		}
+
+		if (!this.connected) {
+			this.log("Cannot send RPC: not connected");
+			return;
+		}
+
+		// Client-side rate limiting
+		if (!this.checkRateLimit()) {
+			this.log("Rate limit exceeded, dropping RPC");
+			return;
+		}
+
+		try {
+			// Encode RPC
+			const rpcData = this.rpcRegistry.encode(rpc, data);
+
+			// Wrap with message type header
+			const message = new Uint8Array(1 + rpcData.byteLength);
+			message[0] = MessageType.CUSTOM;
+			message.set(rpcData, 1);
+
+			// Send to server
+			this.transport.send(message);
+
+			this.log(`Sent RPC (method: ${rpc.method})`);
+		} catch (error) {
+			this.log(`Failed to send RPC: ${error}`);
+		}
+	}
+
+	/**
+	 * Register a handler for incoming RPCs from the server (type-safe)
+	 * Supports multiple handlers per RPC method
+	 *
+	 * @template TSchema The RPC data type
+	 * @param rpc The RPC definition created by defineRpc()
+	 * @param handler Callback function to handle the RPC
+	 * @returns Unsubscribe function to remove this handler
+	 *
+	 * @example
+	 * ```ts
+	 * const MatchCountdown = defineRpc({
+	 *   method: 'matchCountdown',
+	 *   schema: { secondsRemaining: BinaryCodec.u8 }
+	 * });
+	 *
+	 * client.onRpc(MatchCountdown, (rpc) => {
+	 *   console.log(`Match starting in ${rpc.secondsRemaining}s`);
+	 * });
+	 * ```
+	 */
+	onRpc<TSchema extends Record<string, any>>(
+		rpc: DefinedRpc<TSchema>,
+		handler: (data: TSchema) => void
+	): () => void {
+		if (!this.rpcRegistry) {
+			throw new Error('RpcRegistry not configured. Pass rpcRegistry to ClientNetworkConfig.');
+		}
+
+		let handlers = this.rpcHandlers.get(rpc.method);
+		if (!handlers) {
+			handlers = [];
+			this.rpcHandlers.set(rpc.method, handlers);
+		}
+		handlers.push(handler as (data: any) => void);
+
+		// Return unsubscribe function
+		return () => {
+			const handlers = this.rpcHandlers.get(rpc.method);
+			if (handlers) {
+				const index = handlers.indexOf(handler as (data: any) => void);
 				if (index > -1) {
 					handlers.splice(index, 1);
 				}
@@ -349,8 +458,7 @@ export class ClientNetwork<TSnapshots = unknown> {
 				this.log("Received heartbeat from server");
 				break;
 			case MessageType.CUSTOM:
-				// Could add custom message handlers here
-				this.log("Received custom message from server");
+				this.handleRpc(payload);
 				break;
 			default:
 				this.log(`Unknown message type: ${messageType}`);
@@ -382,6 +490,39 @@ export class ClientNetwork<TSnapshots = unknown> {
 			}
 		} catch (error) {
 			this.log(`Failed to decode snapshot: ${error}`);
+		}
+	}
+
+	/**
+	 * Handle incoming RPC message from server
+	 */
+	private handleRpc(data: Uint8Array): void {
+		if (!this.rpcRegistry) {
+			this.log("Received RPC but RpcRegistry not configured");
+			return;
+		}
+
+		try {
+			// Decode using RPC registry (returns { method, data })
+			const decoded = this.rpcRegistry.decode(data);
+
+			this.log(`Received RPC (method: ${decoded.method})`);
+
+			// Call all method-specific handlers if registered
+			const handlers = this.rpcHandlers.get(decoded.method);
+			if (handlers && handlers.length > 0) {
+				for (const handler of handlers) {
+					try {
+						handler(decoded.data);
+					} catch (error) {
+						this.log(`Error in RPC handler: ${error}`);
+					}
+				}
+			} else {
+				this.log(`No handler registered for RPC method: ${decoded.method}`);
+			}
+		} catch (error) {
+			this.log(`Failed to decode RPC: ${error}`);
 		}
 	}
 

@@ -1,12 +1,13 @@
 # Protocol Layer
 
-Minimalist primitives for networked multiplayer games. Just intents and snapshots - you handle the rest.
+Minimalist primitives for networked multiplayer games. Intents, snapshots, and RPCs - you handle the rest.
 
 ## What You Get
 
-1. **IntentRegistry** - Register, encode, decode intents with zero allocations
-2. **Snapshot<T>** - Type-safe delta updates
-3. **applySnapshot()** - Deep merge snapshot updates into state
+1. **IntentRegistry** - Register, encode, decode intents with zero allocations (Client → Server inputs)
+2. **Snapshot<T>** - Type-safe delta updates (Server → Client state sync)
+3. **RpcRegistry** - Remote procedure calls for one-off events (Bidirectional)
+4. **applySnapshot()** - Deep merge snapshot updates into state
 
 That's it. No loops, no queues, no storage - just the codec layer.
 
@@ -356,6 +357,92 @@ registry.register(MoveIntent.kind, MoveIntent.codec);
 registry.register(ShootIntent.kind, ShootIntent.codec);
 registry.register(JumpIntent.kind, JumpIntent.codec);
 ```
+
+## RPCs (Remote Procedure Calls)
+
+For one-off events that don't fit intents (inputs) or snapshots (state sync), use RPCs.
+
+### When to Use RPCs
+
+**✅ Use RPCs for:**
+- Meta-game events (achievements, notifications)
+- Match lifecycle (countdown, match end, pause)
+- Chat messages (transient communication)
+- UI feedback (purchase confirmations, errors)
+- System announcements
+
+**❌ Don't use RPCs for:**
+- Game state (use **Snapshots** instead)
+- Player inputs (use **Intents** instead)
+- Anything that needs persistence or late joiners need to know
+
+### Define RPCs
+
+```ts
+import { defineRpc, RpcRegistry } from "./protocol/rpc";
+import { BinaryCodec } from "./core/binary-codec";
+
+// Server → Client RPC
+const MatchCountdown = defineRpc({
+  method: 'matchCountdown',
+  schema: {
+    secondsRemaining: BinaryCodec.u8,
+  }
+});
+
+// Client → Server RPC
+const BuyItem = defineRpc({
+  method: 'buyItem',
+  schema: {
+    itemId: BinaryCodec.string(32),
+  }
+});
+
+type MatchCountdown = typeof MatchCountdown._type;
+type BuyItem = typeof BuyItem._type;
+```
+
+### Register RPCs
+
+```ts
+const rpcRegistry = new RpcRegistry();
+rpcRegistry.register(MatchCountdown);
+rpcRegistry.register(BuyItem);
+```
+
+### Client: Send & Receive RPCs
+
+```ts
+// Send RPC to server
+client.sendRpc(BuyItem, { itemId: 'long_sword' });
+
+// Receive RPC from server
+client.onRpc(MatchCountdown, (rpc) => {
+  console.log(`Match starting in ${rpc.secondsRemaining}s`);
+  showCountdownUI(rpc.secondsRemaining);
+});
+```
+
+### Server: Send & Receive RPCs
+
+```ts
+// Receive RPC from client
+server.onRpc(BuyItem, (peerId, rpc) => {
+  const player = getPlayer(peerId);
+  if (player.gold >= getItemCost(rpc.itemId)) {
+    player.items.push(rpc.itemId);
+    player.gold -= getItemCost(rpc.itemId);
+  }
+});
+
+// Send RPC to specific client
+server.sendRpc(peerId, MatchCountdown, { secondsRemaining: 10 });
+
+// Broadcast RPC to all clients
+server.sendRpcBroadcast(MatchCountdown, { secondsRemaining: 3 });
+```
+
+**Note:** RPCs use `MessageType.CUSTOM (0xff)` and are fully integrated with rate limiting, backpressure handling, and buffer pooling.
 
 ## What You Build Yourself
 

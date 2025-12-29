@@ -2,6 +2,8 @@ import type { IntentRegistry } from "../protocol/intent/intent-registry";
 import type { SnapshotRegistry } from "../protocol/snapshot/snapshot-registry";
 import type { Snapshot } from "../protocol/snapshot/snapshot";
 import type { Intent } from "../protocol/intent/intent";
+import type { RpcRegistry } from "../protocol/rpc/rpc-registry";
+import type { DefinedRpc } from "../protocol/rpc/rpc";
 import { MessageType, MessagePriority, type PeerState, type ServerTransportAdapter, type TransportAdapter, type NetworkConfig, type QueuedMessage } from "./types";
 import { MessageWrapperPool } from "./buffer-pool";
 import { DefinedIntent } from "../protocol";
@@ -18,6 +20,9 @@ export interface ServerNetworkConfig<TPeer extends TransportAdapter, TSnapshots>
 
 	/** Factory to create per-peer snapshot registries */
 	createPeerSnapshotRegistry: () => SnapshotRegistry<TSnapshots>;
+
+	/** RPC registry for bidirectional remote procedure calls (optional) */
+	rpcRegistry?: RpcRegistry;
 
 	/** Network configuration */
 	config?: NetworkConfig;
@@ -76,6 +81,7 @@ export class ServerNetwork<TPeer extends TransportAdapter = TransportAdapter, TS
 	private transport: ServerTransportAdapter<TPeer>;
 	private intentRegistry: IntentRegistry;
 	private createPeerSnapshotRegistry: () => SnapshotRegistry<TSnapshots>;
+	private rpcRegistry?: RpcRegistry;
 	private config: Required<NetworkConfig>;
 
 	/** Per-peer state tracking */
@@ -96,6 +102,9 @@ export class ServerNetwork<TPeer extends TransportAdapter = TransportAdapter, TS
 	/** Global intent handler called for ALL intents before specific handlers */
 	private anyIntentHandlers: Array<(peerId: string, intent: Intent) => void> = [];
 
+	/** RPC method handlers: method -> handler[] (supports multiple handlers) */
+	private rpcHandlers = new Map<string, Array<(peerId: string, data: any) => void>>();
+
 	/** Connection lifecycle handlers */
 	private connectionHandlers: Array<(peerId: string) => void> = [];
 	private disconnectionHandlers: Array<(peerId: string) => void> = [];
@@ -110,6 +119,7 @@ export class ServerNetwork<TPeer extends TransportAdapter = TransportAdapter, TS
 		this.transport = config.transport;
 		this.intentRegistry = config.intentRegistry;
 		this.createPeerSnapshotRegistry = config.createPeerSnapshotRegistry;
+		this.rpcRegistry = config.rpcRegistry;
 		this.config = {
 			maxMessageSize: config.config?.maxMessageSize ?? 65536,
 			debug: config.config?.debug ?? false,
@@ -224,6 +234,152 @@ export class ServerNetwork<TPeer extends TransportAdapter = TransportAdapter, TS
 	 */
 	onDisconnection(handler: (peerId: string) => void): void {
 		this.disconnectionHandlers.push(handler);
+	}
+
+	/**
+	 * Send an RPC to a specific peer (type-safe)
+	 *
+	 * @template TSchema The RPC data type
+	 * @param peerId The peer to send to
+	 * @param rpc The RPC definition created by defineRpc()
+	 * @param data The RPC data to send
+	 * @param priority Message priority (default: NORMAL)
+	 *
+	 * @example
+	 * ```ts
+	 * const MatchCountdown = defineRpc({
+	 *   method: 'matchCountdown',
+	 *   schema: { secondsRemaining: BinaryCodec.u8 }
+	 * });
+	 *
+	 * server.sendRpc(peerId, MatchCountdown, { secondsRemaining: 10 });
+	 * ```
+	 */
+	sendRpc<TSchema extends Record<string, any>>(
+		peerId: string,
+		rpc: DefinedRpc<TSchema>,
+		data: TSchema,
+		priority: MessagePriority = MessagePriority.NORMAL
+	): void {
+		if (!this.rpcRegistry) {
+			throw new Error('RpcRegistry not configured. Pass rpcRegistry to ServerNetworkConfig.');
+		}
+
+		const peer = this.peers.get(peerId);
+		if (!peer) {
+			this.log(`Cannot send RPC to unknown peer: ${peerId}`);
+			return;
+		}
+
+		try {
+			// Encode RPC
+			const rpcData = this.rpcRegistry.encode(rpc, data);
+
+			// Wrap with message type header (use pool if enabled)
+			let message: Uint8Array;
+			if (this.messagePool) {
+				message = this.messagePool.wrap(MessageType.CUSTOM, rpcData);
+			} else {
+				message = new Uint8Array(1 + rpcData.byteLength);
+				message[0] = MessageType.CUSTOM;
+				message.set(rpcData, 1);
+			}
+
+			// Check backpressure and queue if necessary
+			if (peer.isBackpressured || peer.sendQueue.length > 0) {
+				// Peer is experiencing backpressure, queue the message with priority
+				this.queueMessage(peer, message, priority);
+
+				// Release pooled buffer since we copied it in queueMessage
+				if (this.messagePool) {
+					this.messagePool.release(message);
+				}
+				return;
+			}
+
+			// Try to send immediately
+			this.sendMessageToPeer(peer, message);
+
+			// Release pooled buffer after send
+			if (this.messagePool) {
+				this.messagePool.release(message);
+			}
+
+			this.log(`Sent RPC (method: ${rpc.method}) to peer: ${peerId}`);
+		} catch (error) {
+			this.log(`Failed to send RPC to peer ${peerId}: ${error}`);
+		}
+	}
+
+	/**
+	 * Send an RPC to all connected peers (broadcast)
+	 *
+	 * @template TSchema The RPC data type
+	 * @param rpc The RPC definition created by defineRpc()
+	 * @param data The RPC data to send
+	 * @param priority Message priority (default: NORMAL)
+	 *
+	 * @example
+	 * ```ts
+	 * server.sendRpcBroadcast(MatchCountdown, { secondsRemaining: 3 });
+	 * ```
+	 */
+	sendRpcBroadcast<TSchema extends Record<string, any>>(
+		rpc: DefinedRpc<TSchema>,
+		data: TSchema,
+		priority: MessagePriority = MessagePriority.NORMAL
+	): void {
+		for (const peerId of this.getPeerIds()) {
+			this.sendRpc(peerId, rpc, data, priority);
+		}
+	}
+
+	/**
+	 * Register a handler for incoming RPCs from clients (type-safe)
+	 * Supports multiple handlers per RPC method
+	 *
+	 * @template TSchema The RPC data type
+	 * @param rpc The RPC definition created by defineRpc()
+	 * @param handler Callback function to handle the RPC
+	 * @returns Unsubscribe function to remove this handler
+	 *
+	 * @example
+	 * ```ts
+	 * const BuyItem = defineRpc({
+	 *   method: 'buyItem',
+	 *   schema: { itemId: BinaryCodec.string(32) }
+	 * });
+	 *
+	 * server.onRpc(BuyItem, (peerId, rpc) => {
+	 *   console.log(`${peerId} wants to buy ${rpc.itemId}`);
+	 * });
+	 * ```
+	 */
+	onRpc<TSchema extends Record<string, any>>(
+		rpc: DefinedRpc<TSchema>,
+		handler: (peerId: string, data: TSchema) => void
+	): () => void {
+		if (!this.rpcRegistry) {
+			throw new Error('RpcRegistry not configured. Pass rpcRegistry to ServerNetworkConfig.');
+		}
+
+		let handlers = this.rpcHandlers.get(rpc.method);
+		if (!handlers) {
+			handlers = [];
+			this.rpcHandlers.set(rpc.method, handlers);
+		}
+		handlers.push(handler as (peerId: string, data: any) => void);
+
+		// Return unsubscribe function
+		return () => {
+			const handlers = this.rpcHandlers.get(rpc.method);
+			if (handlers) {
+				const index = handlers.indexOf(handler as (peerId: string, data: any) => void);
+				if (index > -1) {
+					handlers.splice(index, 1);
+				}
+			}
+		};
 	}
 
 	/**
@@ -822,8 +978,7 @@ export class ServerNetwork<TPeer extends TransportAdapter = TransportAdapter, TS
 				this.log(`Received heartbeat from peer ${peerId}`);
 				break;
 			case MessageType.CUSTOM:
-				// Could add custom message handlers here
-				this.log(`Received custom message from peer ${peerId}`);
+				this.handleRpc(peerId, payload);
 				break;
 			default:
 				this.log(`Unknown message type ${messageType} from peer ${peerId}`);
@@ -874,6 +1029,45 @@ export class ServerNetwork<TPeer extends TransportAdapter = TransportAdapter, TS
 			}
 		} catch (error) {
 			this.log(`Failed to decode intent from peer ${peerId}: ${error}`);
+		}
+	}
+
+	/**
+	 * Handle incoming RPC message from a peer
+	 */
+	private handleRpc(peerId: string, data: Uint8Array): void {
+		if (!this.rpcRegistry) {
+			this.log("Received RPC but RpcRegistry not configured");
+			return;
+		}
+
+		// Rate limiting check
+		if (!this.checkRateLimit(peerId)) {
+			this.log(`Rate limit exceeded for peer ${peerId}, dropping RPC`);
+			return;
+		}
+
+		try {
+			// Decode using RPC registry (returns { method, data })
+			const decoded = this.rpcRegistry.decode(data);
+
+			this.log(`Received RPC (method: ${decoded.method}) from peer ${peerId}`);
+
+			// Call all method-specific handlers if registered
+			const handlers = this.rpcHandlers.get(decoded.method);
+			if (handlers && handlers.length > 0) {
+				for (const handler of handlers) {
+					try {
+						handler(peerId, decoded.data);
+					} catch (error) {
+						this.log(`Error in RPC handler: ${error}`);
+					}
+				}
+			} else {
+				this.log(`No handler registered for RPC method: ${decoded.method}`);
+			}
+		} catch (error) {
+			this.log(`Failed to decode RPC from peer ${peerId}: ${error}`);
 		}
 	}
 

@@ -90,3 +90,4 @@
 
 export * from "./intent";
 export * from "./snapshot";
+export * from "./rpc";
