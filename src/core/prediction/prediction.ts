@@ -5,7 +5,7 @@
  * Used for prediction and reconciliation in a server-authoritative architecture.
  */
 export class IntentTracker<T> {
-  private tracker = new Map<number, T>();
+  tracker = new Map<number, T[]>();
 
   get size() {
     return this.tracker.size;
@@ -17,7 +17,11 @@ export class IntentTracker<T> {
    * @param {T} intent - The intent data.
    */
   track(tick: number, intent: T): T {
-    this.tracker.set(tick, intent);
+    if (!this.tracker.has(tick)) {
+      this.tracker.set(tick, []);
+    }
+
+    this.tracker.get(tick).push(intent);
     return intent;
   }
 
@@ -28,16 +32,16 @@ export class IntentTracker<T> {
    * @returns {T[]} Array of remaining intents.
    */
   dropUpTo(tick: number): T[] {
-    const remaining: [number, T][] = [];
+    const remaining: [number, T[]][] = [];
 
-    for (const [t, intent] of this.tracker) {
+    for (const [t, intents] of this.tracker) {
       if (t <= tick) this.tracker.delete(t);
-      else remaining.push([t, intent]);
+      else remaining.push([t, intents]);
     }
 
     // sort by tick ascending
     remaining.sort(([a], [b]) => a - b);
-    return remaining.map(([_, intent]) => intent);
+    return remaining.map(([_, intents]) => intents).flat();
   }
 
   /**
@@ -47,7 +51,8 @@ export class IntentTracker<T> {
   values(): T[] {
     return Array.from(this.tracker.entries())
       .sort(([a], [b]) => a - b)
-      .map(([_, intent]) => intent);
+      .map(([_, intents]) => intents)
+      .flat();
   }
 }
 
@@ -58,7 +63,7 @@ export class IntentTracker<T> {
  * Used for prediction correction in server-authoritative multiplayer games.
  */
 export class Reconciliator<T, U> {
-  private tracker: IntentTracker<T> = new IntentTracker<T>();
+  tracker: IntentTracker<T> = new IntentTracker<T>();
 
   /**
    * @param {Object} options - Callbacks for applying snapshot state and replaying intents.
@@ -70,7 +75,7 @@ export class Reconciliator<T, U> {
       onLoadState: (snapshotState: U) => void;
       onReplay: (remainingIntents: T[]) => void;
     }
-  ) {}
+  ) { }
 
   /**
    * Adds a new intent to the tracker.
@@ -95,7 +100,9 @@ export class Reconciliator<T, U> {
     // 2. Remove confirmed intents and get remaining
     const remainingIntents = this.tracker.dropUpTo(snapshot.tick);
 
-    // 3. Replay remaining intents for prediction
-    this.options.onReplay(remainingIntents);
+    // 3. Only replay if there are actually remaining intents
+    if (remainingIntents.length > 0) {
+      this.options.onReplay(remainingIntents);
+    }
   }
 }
