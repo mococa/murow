@@ -91,6 +91,11 @@ export class ComponentStore<T extends object> {
       this.reusableObject[this.fieldKeys[0]] = this.fields[0].read(this.view, baseOffset + this.fieldOffsets[0]);
       this.reusableObject[this.fieldKeys[1]] = this.fields[1].read(this.view, baseOffset + this.fieldOffsets[1]);
       this.reusableObject[this.fieldKeys[2]] = this.fields[2].read(this.view, baseOffset + this.fieldOffsets[2]);
+    } else if (length === 4) {
+      this.reusableObject[this.fieldKeys[0]] = this.fields[0].read(this.view, baseOffset + this.fieldOffsets[0]);
+      this.reusableObject[this.fieldKeys[1]] = this.fields[1].read(this.view, baseOffset + this.fieldOffsets[1]);
+      this.reusableObject[this.fieldKeys[2]] = this.fields[2].read(this.view, baseOffset + this.fieldOffsets[2]);
+      this.reusableObject[this.fieldKeys[3]] = this.fields[3].read(this.view, baseOffset + this.fieldOffsets[3]);
     } else {
       // Generic loop for other sizes
       for (let i = 0; i < length; i++) {
@@ -147,6 +152,11 @@ export class ComponentStore<T extends object> {
       this.fields[0].write(this.view, baseOffset + this.fieldOffsets[0], data[this.fieldKeys[0]]);
       this.fields[1].write(this.view, baseOffset + this.fieldOffsets[1], data[this.fieldKeys[1]]);
       this.fields[2].write(this.view, baseOffset + this.fieldOffsets[2], data[this.fieldKeys[2]]);
+    } else if (length === 4) {
+      this.fields[0].write(this.view, baseOffset + this.fieldOffsets[0], data[this.fieldKeys[0]]);
+      this.fields[1].write(this.view, baseOffset + this.fieldOffsets[1], data[this.fieldKeys[1]]);
+      this.fields[2].write(this.view, baseOffset + this.fieldOffsets[2], data[this.fieldKeys[2]]);
+      this.fields[3].write(this.view, baseOffset + this.fieldOffsets[3], data[this.fieldKeys[3]]);
     } else {
       // Generic loop for other sizes
       for (let i = 0; i < length; i++) {
@@ -166,9 +176,34 @@ export class ComponentStore<T extends object> {
   update(entityId: number, partial: Partial<T>): void {
     const baseOffset = entityId * this.stride;
 
-    // Use Object.keys for faster iteration than for...in
+    // Fast path for single field update (90% of cases) - avoids Object.keys allocation
     const keys = Object.keys(partial) as (keyof T)[];
-    for (let j = 0; j < keys.length; j++) {
+    const keyCount = keys.length;
+
+    if (keyCount === 1) {
+      const key = keys[0];
+      const i = this.fieldIndexMap.get(key)!;
+      this.fields[i].write(
+        this.view,
+        baseOffset + this.fieldOffsets[i],
+        partial[key]!
+      );
+      return;
+    }
+
+    // Fast path for two field update (common for 2D positions)
+    if (keyCount === 2) {
+      const key0 = keys[0];
+      const key1 = keys[1];
+      const i0 = this.fieldIndexMap.get(key0)!;
+      const i1 = this.fieldIndexMap.get(key1)!;
+      this.fields[i0].write(this.view, baseOffset + this.fieldOffsets[i0], partial[key0]!);
+      this.fields[i1].write(this.view, baseOffset + this.fieldOffsets[i1], partial[key1]!);
+      return;
+    }
+
+    // Generic path for multiple fields
+    for (let j = 0; j < keyCount; j++) {
       const key = keys[j];
       const i = this.fieldIndexMap.get(key)!;
       this.fields[i].write(

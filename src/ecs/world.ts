@@ -391,38 +391,49 @@ export class World {
       this.queryResultBuffers.set(requiredMask, buffer);
     }
 
-    // Clear and refill buffer
-    buffer.length = 0;
-
     // Fast array iteration with direct bitmask access
     const entities = this.aliveEntitiesArray;
     const masks = this.componentMasks;
     const length = entities.length;
 
-    // Unrolled loop for better performance
-    let i = 0;
-    const remainder = length % 4;
+    // Use write cursor pattern instead of buffer.length = 0 + push
+    let writeIdx = 0;
 
-    // Process 4 entities at a time
-    for (; i < length - remainder; i += 4) {
+    // Unrolled loop for better performance (8x unrolling)
+    let i = 0;
+    const remainder = length % 8;
+
+    // Process 8 entities at a time
+    for (; i < length - remainder; i += 8) {
       const e0 = entities[i];
       const e1 = entities[i + 1];
       const e2 = entities[i + 2];
       const e3 = entities[i + 3];
+      const e4 = entities[i + 4];
+      const e5 = entities[i + 5];
+      const e6 = entities[i + 6];
+      const e7 = entities[i + 7];
 
-      if ((masks[e0] & requiredMask) === requiredMask) buffer.push(e0);
-      if ((masks[e1] & requiredMask) === requiredMask) buffer.push(e1);
-      if ((masks[e2] & requiredMask) === requiredMask) buffer.push(e2);
-      if ((masks[e3] & requiredMask) === requiredMask) buffer.push(e3);
+      if ((masks[e0] & requiredMask) === requiredMask) buffer[writeIdx++] = e0;
+      if ((masks[e1] & requiredMask) === requiredMask) buffer[writeIdx++] = e1;
+      if ((masks[e2] & requiredMask) === requiredMask) buffer[writeIdx++] = e2;
+      if ((masks[e3] & requiredMask) === requiredMask) buffer[writeIdx++] = e3;
+      if ((masks[e4] & requiredMask) === requiredMask) buffer[writeIdx++] = e4;
+      if ((masks[e5] & requiredMask) === requiredMask) buffer[writeIdx++] = e5;
+      if ((masks[e6] & requiredMask) === requiredMask) buffer[writeIdx++] = e6;
+      if ((masks[e7] & requiredMask) === requiredMask) buffer[writeIdx++] = e7;
     }
 
     // Process remaining entities
     for (; i < length; i++) {
       const entity = entities[i];
       if ((masks[entity] & requiredMask) === requiredMask) {
-        buffer.push(entity);
+        buffer[writeIdx++] = entity;
       }
     }
+
+    // Truncate buffer to actual size
+    buffer.length = writeIdx;
 
     return buffer;
   }

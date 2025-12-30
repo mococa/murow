@@ -495,7 +495,38 @@ describe("ECS Performance Benchmarks", () => {
   });
 
   test("benchmark: complex game simulation (realistic workload)", () => {
-    console.log("\n=== Complex Game Simulation Benchmark ===");
+    console.log("\n=== Complex Game Simulation Benchmark (10+ Systems) ===");
+
+    // Define additional components for more realistic simulation
+    const Armor = defineComponent("Armor", {
+      value: BinaryCodec.u16,
+    });
+
+    const Damage = defineComponent("Damage", {
+      amount: BinaryCodec.u16,
+    });
+
+    const Cooldown = defineComponent("Cooldown", {
+      current: BinaryCodec.f32,
+      max: BinaryCodec.f32,
+    });
+
+    const Team = defineComponent("Team", {
+      id: BinaryCodec.u8,
+    });
+
+    const Target = defineComponent("Target", {
+      entityId: BinaryCodec.u32,
+    });
+
+    const Status = defineComponent("Status", {
+      stunned: BinaryCodec.u8,
+      slowed: BinaryCodec.u8,
+    });
+
+    const Lifetime = defineComponent("Lifetime", {
+      remaining: BinaryCodec.f32,
+    });
 
     const entityCounts = [500, 1000, 5000, 10000, 25000, 50000];
     const fps60Budget = 16.67; // 60 FPS
@@ -504,15 +535,44 @@ describe("ECS Performance Benchmarks", () => {
     for (const count of entityCounts) {
       const world = new World({
         maxEntities: count,
-        components: [Transform, Velocity, Health],
+        components: [Transform, Velocity, Health, Armor, Damage, Cooldown, Team, Target, Status, Lifetime],
       });
 
-      // Setup entities
+      // Setup entities with varied component combinations
       for (let i = 0; i < count; i++) {
         const entity = world.spawn();
-        world.add(entity, Transform, { x: Math.random() * 1000, y: Math.random() * 1000, rotation: 0 });
+        world.add(entity, Transform, { x: Math.random() * 1000, y: Math.random() * 1000, rotation: Math.random() * Math.PI * 2 });
         world.add(entity, Velocity, { vx: Math.random() * 10 - 5, vy: Math.random() * 10 - 5 });
         world.add(entity, Health, { current: 100, max: 100 });
+
+        // 80% have armor
+        if (Math.random() > 0.2) {
+          world.add(entity, Armor, { value: Math.floor(Math.random() * 50) });
+        }
+
+        // 60% can deal damage
+        if (Math.random() > 0.4) {
+          world.add(entity, Damage, { amount: Math.floor(Math.random() * 20) + 10 });
+          world.add(entity, Cooldown, { current: 0, max: 1.0 });
+        }
+
+        // Assign to teams
+        world.add(entity, Team, { id: Math.floor(Math.random() * 4) });
+
+        // 30% have targets
+        if (Math.random() > 0.7) {
+          world.add(entity, Target, { entityId: Math.floor(Math.random() * count) });
+        }
+
+        // 20% have status effects
+        if (Math.random() > 0.8) {
+          world.add(entity, Status, { stunned: Math.random() > 0.5 ? 1 : 0, slowed: Math.random() > 0.5 ? 1 : 0 });
+        }
+
+        // 15% are temporary entities (projectiles, effects, etc.)
+        if (Math.random() > 0.85) {
+          world.add(entity, Lifetime, { remaining: Math.random() * 5 });
+        }
       }
 
       // Simulate 60 frames
@@ -523,7 +583,7 @@ describe("ECS Performance Benchmarks", () => {
       for (let frame = 0; frame < frameCount; frame++) {
         const frameStart = performance.now();
 
-        // Movement system
+        // System 1: Movement system (applies velocity to transform)
         for (const entity of world.query(Transform, Velocity)) {
           const t = world.get(entity, Transform);
           const v = world.get(entity, Velocity);
@@ -534,13 +594,149 @@ describe("ECS Performance Benchmarks", () => {
           });
         }
 
-        // Health system (some entities take damage)
-        if (frame % 10 === 0) {
+        // System 2: Rotation system (rotate entities based on velocity)
+        for (const entity of world.query(Transform, Velocity)) {
+          const v = world.get(entity, Velocity);
+          if (v.vx !== 0 || v.vy !== 0) {
+            world.update(entity, Transform, {
+              rotation: Math.atan2(v.vy, v.vx),
+            });
+          }
+        }
+
+        // System 3: Boundary system (wrap around screen edges)
+        for (const entity of world.query(Transform)) {
+          const t = world.get(entity, Transform);
+          let needsUpdate = false;
+          let newX = t.x;
+          let newY = t.y;
+
+          if (t.x < 0) { newX = 1000; needsUpdate = true; }
+          if (t.x > 1000) { newX = 0; needsUpdate = true; }
+          if (t.y < 0) { newY = 1000; needsUpdate = true; }
+          if (t.y > 1000) { newY = 0; needsUpdate = true; }
+
+          if (needsUpdate) {
+            world.update(entity, Transform, { x: newX, y: newY });
+          }
+        }
+
+        // System 4: Health regeneration system
+        if (frame % 30 === 0) {
           for (const entity of world.query(Health)) {
             const h = world.get(entity, Health);
-            if (h.current > 0) {
+            if (h.current > 0 && h.current < h.max) {
+              const newHealth = h.current + 5;
               world.update(entity, Health, {
-                current: Math.max(0, h.current - 1),
+                current: newHealth > h.max ? h.max : newHealth,
+              });
+            }
+          }
+        }
+
+        // System 5: Cooldown system
+        for (const entity of world.query(Cooldown)) {
+          const cd = world.get(entity, Cooldown);
+          if (cd.current > 0) {
+            const newCooldown = cd.current - deltaTime;
+            world.update(entity, Cooldown, {
+              current: newCooldown < 0 ? 0 : newCooldown,
+            });
+          }
+        }
+
+        // System 6: Combat system (entities with damage and target)
+        if (frame % 5 === 0) {
+          for (const entity of world.query(Damage, Cooldown, Target)) {
+            const cd = world.get(entity, Cooldown);
+            const target = world.get(entity, Target);
+
+            if (cd.current === 0 && world.isAlive(target.entityId)) {
+              const dmg = world.get(entity, Damage);
+
+              if (world.has(target.entityId, Health)) {
+                const targetHealth = world.get(target.entityId, Health);
+                let damageDealt = dmg.amount;
+
+                // Apply armor reduction
+                if (world.has(target.entityId, Armor)) {
+                  const armor = world.get(target.entityId, Armor);
+                  const reduced = dmg.amount - armor.value * 0.1;
+                  damageDealt = reduced < 1 ? 1 : reduced;
+                }
+
+                const newHealth = targetHealth.current - damageDealt;
+                world.update(target.entityId, Health, {
+                  current: newHealth < 0 ? 0 : newHealth,
+                });
+
+                // Reset cooldown
+                world.update(entity, Cooldown, { current: cd.max });
+              }
+            }
+          }
+        }
+
+        // System 7: Death system (despawn dead entities)
+        const toRemove: number[] = [];
+        for (const entity of world.query(Health)) {
+          const h = world.get(entity, Health);
+          if (h.current <= 0) {
+            toRemove.push(entity);
+          }
+        }
+        for (const entity of toRemove) {
+          world.despawn(entity);
+        }
+
+        // System 8: Status effect system
+        for (const entity of world.query(Status, Velocity)) {
+          const status = world.get(entity, Status);
+          const v = world.get(entity, Velocity);
+
+          if (status.stunned === 1) {
+            world.update(entity, Velocity, { vx: 0, vy: 0 });
+          } else if (status.slowed === 1) {
+            world.update(entity, Velocity, {
+              vx: v.vx * 0.5,
+              vy: v.vy * 0.5,
+            });
+          }
+        }
+
+        // System 9: Lifetime system (despawn temporary entities)
+        const expiredEntities: number[] = [];
+        for (const entity of world.query(Lifetime)) {
+          const lifetime = world.get(entity, Lifetime);
+          const remaining = lifetime.remaining - deltaTime;
+
+          if (remaining <= 0) {
+            expiredEntities.push(entity);
+          } else {
+            world.update(entity, Lifetime, { remaining });
+          }
+        }
+        for (const entity of expiredEntities) {
+          world.despawn(entity);
+        }
+
+        // System 10: Velocity damping system (apply friction)
+        for (const entity of world.query(Velocity)) {
+          const v = world.get(entity, Velocity);
+          world.update(entity, Velocity, {
+            vx: v.vx * 0.99,
+            vy: v.vy * 0.99,
+          });
+        }
+
+        // System 11: Random velocity changes (simulates AI behavior)
+        if (frame % 20 === 0) {
+          for (const entity of world.query(Velocity)) {
+            if (Math.random() > 0.9) {
+              const v = world.get(entity, Velocity);
+              world.update(entity, Velocity, {
+                vx: v.vx + (Math.random() - 0.5) * 2,
+                vy: v.vy + (Math.random() - 0.5) * 2,
               });
             }
           }
@@ -563,7 +759,7 @@ describe("ECS Performance Benchmarks", () => {
     }
 
     expect(true).toBe(true);
-  });
+  }, { timeout: 15000 });
 
   test("benchmark: memory usage comparison", () => {
     console.log("\n=== Memory Usage Benchmark ===");
@@ -637,4 +833,4 @@ describe("ECS Performance Benchmarks", () => {
 
     expect(results.length).toBe(1000);
   });
-});
+}); // Extended timeout for benchmarks
