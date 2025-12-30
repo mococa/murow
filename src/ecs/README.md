@@ -159,29 +159,31 @@ network.send(snapshot);
 | Metric | Performance |
 |--------|-------------|
 | **Spawn rate** | 30M+ entities/sec |
-| **Query speed** | 10k entities in 0.06ms |
-| **Component access** | 11.1M ops/sec (get) |
-| **Frame time** (5k entities) | 1.07ms avg (~931 FPS) |
+| **Query speed** | 10k entities in 0.18ms single, 4.66ms (100x) |
+| **Component access** | 11.2M ops/sec (get) |
+| **Frame time** (5k entities) | 4.89ms avg (~205 FPS) |
 | **Memory overhead** | Zero allocations in gameplay |
 
 ### Realistic Game Simulation
-Movement + Health systems with 2 queries per frame:
+11 systems with realistic workload (movement, rotation, combat, health, status effects, etc.):
 
 | Entities | Avg Frame | FPS | 60fps (16.67ms) | 30fps (33.33ms) |
 |----------|-----------|-----|-----------------|-----------------|
-| 500 | 0.27ms | 3,704 | ✅ 1.6% | ✅ 0.8% |
-| 1,000 | 0.30ms | 3,333 | ✅ 1.8% | ✅ 0.9% |
-| 5,000 | 1.07ms | 931 | ✅ 6.4% | ✅ 3.2% |
-| 10,000 | 2.11ms | 475 | ✅ 12.7% | ✅ 6.3% |
-| 25,000 | 4.32ms | 232 | ✅ 25.9% | ✅ 13.0% |
-| 50,000 | 8.76ms | 114 | ✅ 52.5% | ✅ 26.3% |
+| 500 | 0.76ms | 1,322 | ✅ 4.6% | ✅ 2.3% |
+| 1,000 | 1.09ms | 914 | ✅ 6.5% | ✅ 3.3% |
+| 5,000 | 4.89ms | 205 | ✅ 29.3% | ✅ 14.7% |
+| 10,000 | 9.63ms | 104 | ✅ 57.8% | ✅ 28.9% |
+| 25,000 | 23.11ms | 43 | ❌ 138.7% | ✅ 69.3% |
+| 50,000 | 46.53ms | 21 | ❌ 279.2% | ⚠️ 139.6% |
 
-**Even 50k entities stays comfortably within both 60 FPS and 30 FPS budgets!**
+**10k entities fits comfortably in 60 FPS budget. 25k entities achieves 30 FPS.**
 
 ### Optimizations Applied
-- Loop unrolling for 2-field and 3-field components (90% of use cases)
-- Query loop unrolling (4x batch processing)
+- Loop unrolling for 2/3/4-field components (covers 95% of use cases)
+- Query loop unrolling (8x batch processing with write cursor)
+- Single/dual-field update fast paths (zero allocation for common cases)
 - Component-specialized read/write paths
+- Inlined math operations in hot paths
 - O(1) entity lookups with index mapping
 - Power-of-2 ring buffer with bitwise operations
 
