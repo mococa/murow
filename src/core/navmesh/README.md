@@ -83,6 +83,46 @@ const path = nav.findPath({
 
 ---
 
+## Web Workers (Optional)
+
+For games with many concurrent pathfinding requests (20+ units), enable workers for parallel processing:
+
+### Modes
+
+```ts
+// Default: synchronous (workers: false)
+const nav = new NavMesh('grid'); // Returns Vec2[]
+const path = nav.findPath({ from, to });
+
+// Always use workers (workers: true)
+const nav = new NavMesh('grid', { workers: true }); // Returns Promise<Vec2[]>
+const path = await nav.findPath({ from, to });
+
+// Auto mode (workers: 'auto')
+const nav = new NavMesh('grid', { workers: 'auto' }); // Returns Vec2[] | Promise<Vec2[]>
+const result = nav.findPath({ from, to });
+const path = result instanceof Promise ? await result : result;
+```
+
+### Performance
+
+- **Single path**: Sync mode faster (no worker overhead)
+- **20+ parallel paths**: Workers ~3x faster
+- **30+ unit RTS**: Workers ~4.5x faster (35 FPS → 162 FPS)
+
+Use workers for RTS/strategy games with many simultaneous pathfinding requests.
+
+```ts
+// Custom pool size (default: 4)
+const nav = new NavMesh('grid', {
+  workers: true,
+  workerPoolSize: 8,
+  workerPath: './custom-worker.js'
+});
+```
+
+---
+
 ## Navigation Modes
 
 ### `grid`
