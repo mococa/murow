@@ -802,7 +802,7 @@ export class NavMesh<TWorkers extends boolean | 'auto' = false> {
       await this.workerPool.init();
     } catch (error) {
       console.warn('Failed to initialize worker pool, falling back to sync:', error);
-      this.options.workers = false;
+      this.options.workers = false as any; // Disable workers on failure
     }
   }
 
