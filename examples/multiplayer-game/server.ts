@@ -73,8 +73,11 @@ class GameServer {
             createPeerSnapshotRegistry: createSnapshotRegistry,
             config: {
                 debug: false,
-                heartbeatInterval: 10000,  // Send heartbeat every 10 seconds
+                heartbeatInterval: 100000,  // Send heartbeat every 10 seconds
                 heartbeatTimeout: 45000,   // Timeout after 45 seconds of no messages
+                maxMessagesPerSecond: 0,
+                maxMessageSize: 1024 * 1024, // 1 MB
+                maxSendQueueSize: 5 * 1024 * 1024, // 5 MB
             },
         });
 
@@ -125,8 +128,6 @@ class GameServer {
             const playerId = this.playerIds.get(peerId);
             if (!playerId) return; // Player not spawned yet
 
-            console.log(`Intent buffered: peer=${peerId.substring(0, 8)}, player=${playerId.substring(0, 12)}, clientTick=${intent.tick}, serverTick=${this.simulation.ticker.tickCount}, direction=(${intent.vx},${intent.vy})`);
-
             // Buffer intent for processing during next pre-tick event
             if (!this.pendingIntents.has(peerId)) {
                 this.pendingIntents.set(peerId, []);
@@ -145,14 +146,10 @@ class GameServer {
         this.startHttpServer();
 
         // Game loop - simulation.update() will trigger onTick callback
-        let lastTime = performance.now();
+        // Use fixed deltaTime for determinism (not actual elapsed time)
         setInterval(() => {
-            const currentTime = performance.now();
-            const deltaTime = (currentTime - lastTime) / 1000;
-            lastTime = currentTime;
-
-            // Update simulation (this triggers onTick callback which handles responses)
-            this.simulation.update(deltaTime);
+            const fixedDeltaTime = 1 / this.simulation.ticker.rate;
+            this.simulation.update(fixedDeltaTime);
         }, 1000 / this.simulation.ticker.rate);
     }
 

@@ -39,7 +39,17 @@ export class GameClient {
 
     reconciler: Reconciliator<Intents.Move, GameStateUpdate>;
     previousPositions: Map<string, { x: number; y: number }> = new Map();
-    lerpAlpha: number = 1;
+    snapshotTimestamps: Map<string, number> = new Map();
+
+    // Error smoothing for own player
+    positionError = { x: 0, y: 0 };
+    readonly errorSmoothingFactor = 0.3; // Increased for faster smoothing
+    positionBeforeReconciliation = { x: 0, y: 0 };
+
+    // Interpolation for own player
+    myPreviousPosition = { x: 0, y: 0 };
+    lastTickTime = 0;
+    shouldInterpolate = false;
 
     constructor() {
         this.canvas = document.getElementById("gameCanvas") as HTMLCanvasElement;
@@ -47,11 +57,32 @@ export class GameClient {
 
         this.simulation = new Simulation();
 
+        // Hook into pre-tick to store position before tick processing
+        this.simulation.events.on('pre-tick', () => {
+            // Store position and timestamp before tick for interpolation
+            const myPlayer = this.simulation.players.get(this.myId!);
+            if (myPlayer) {
+                this.myPreviousPosition.x = myPlayer.x;
+                this.myPreviousPosition.y = myPlayer.y;
+                this.lastTickTime = performance.now();
+                this.shouldInterpolate = true;
+            }
+        });
+
         // Hook into tick event to apply input and send intents
         this.simulation.events.on('tick', ({ tick }) => this.tick(tick));
 
         this.reconciler = new Reconciliator({
-            onLoadState: (state) => this.loadSnapshot(state),
+            onLoadState: (state) => {
+                // Store position before reconciliation to calculate error after
+                const myPlayer = this.simulation.players.get(this.myId!);
+                if (myPlayer && this.myId) {
+                    this.positionBeforeReconciliation.x = myPlayer.x;
+                    this.positionBeforeReconciliation.y = myPlayer.y;
+                }
+
+                this.loadSnapshot(state);
+            },
             onReplay: (intents) => {
                 if (intents.length > 0) {
                     console.log(`Replaying ${intents.length} intents for prediction correction.`);
@@ -62,6 +93,28 @@ export class GameClient {
                 for (const intent of intents) {
                     this.simulation.applyVelocity(this.myId!, intent);
                     this.simulation.step();
+                }
+
+                // After replay, calculate the correction error
+                const myPlayer = this.simulation.players.get(this.myId!);
+                if (myPlayer) {
+                    const errorX = this.positionBeforeReconciliation.x - myPlayer.x;
+                    const errorY = this.positionBeforeReconciliation.y - myPlayer.y;
+                    const errorMagnitude = Math.hypot(errorX, errorY);
+
+                    // Only apply error smoothing if error is significant (> 0.5px)
+                    // This prevents accumulating tiny floating-point errors
+                    if (errorMagnitude > 0.5) {
+                        this.positionError.x = errorX;
+                        this.positionError.y = errorY;
+
+                        // Don't interpolate immediately after reconciliation - wait for next tick
+                        this.shouldInterpolate = false;
+
+                        if (errorMagnitude > 5) {
+                            console.warn(`Large prediction error: ${errorMagnitude.toFixed(2)}px, replayed ${intents.length} intents, before=(${this.positionBeforeReconciliation.x.toFixed(1)}, ${this.positionBeforeReconciliation.y.toFixed(1)}), after=(${myPlayer.x.toFixed(1)}, ${myPlayer.y.toFixed(1)})`);
+                        }
+                    }
                 }
             },
         });
@@ -84,8 +137,9 @@ export class GameClient {
             rpcRegistry: createRpcRegistry(),
             config: {
                 debug: false,
-                heartbeatInterval: 15000,
-                heartbeatTimeout: 45000,
+                heartbeatInterval: 0,
+                maxSendQueueSize: 1024 * 1024, // 1 MB
+                maxMessagesPerSecond: 0,
             },
         });
 
@@ -183,6 +237,8 @@ export class GameClient {
     ================================ */
 
     loadSnapshot(state: GameStateUpdate) {
+        const now = performance.now();
+
         for (const p of state) {
             let player = this.simulation.players.get(p.id);
 
@@ -191,9 +247,21 @@ export class GameClient {
                 player = this.simulation.spawn(p.id);
             }
 
-            // Update position from authoritative server state
-            player.x = p.x;
-            player.y = p.y;
+            if (p.id === this.myId) {
+                // Apply server position (reconciliation will replay from here)
+                // Error calculation happens in onReplay callback after replay completes
+                player.x = p.x;
+                player.y = p.y;
+            } else {
+                // Store previous position before updating (for interpolation)
+                this.previousPositions.set(p.id, { x: player.x, y: player.y });
+                this.snapshotTimestamps.set(p.id, now);
+
+                // Update position from authoritative server state
+                player.x = p.x;
+                player.y = p.y;
+            }
+
             player.color = p.color;
         }
     }
@@ -224,18 +292,48 @@ export class GameClient {
     }
 
     renderPlayers() {
+        const now = performance.now();
+
         for (const [playerId, player] of this.simulation.players) {
             let x = player.x;
             let y = player.y;
 
-            const prev = this.previousPositions.get(playerId);
-            if (prev) {
-                x = lerp(prev.x, player.x, this.simulation.ticker.alpha);
-                y = lerp(prev.y, player.y, this.simulation.ticker.alpha);
-                prev.x = x;
-                prev.y = y;
-            } else if (playerId !== this.myId) {
-                this.previousPositions.set(playerId, { x, y });
+            if (playerId === this.myId) {
+                // Only interpolate if we have a valid previous position from a tick
+                if (this.shouldInterpolate) {
+                    // Interpolate base position between ticks
+                    x = lerp(this.myPreviousPosition.x, player.x, this.simulation.ticker.alpha);
+                    y = lerp(this.myPreviousPosition.y, player.y, this.simulation.ticker.alpha);
+                } else {
+                    // No interpolation - use current position directly
+                    x = player.x;
+                    y = player.y;
+                }
+
+                // Apply error correction on top
+                x += this.positionError.x;
+                y += this.positionError.y;
+
+                // Gradually reduce the error over time (exponential decay)
+                this.positionError.x *= (1 - this.errorSmoothingFactor);
+                this.positionError.y *= (1 - this.errorSmoothingFactor);
+
+                // Clear tiny errors to prevent floating point drift
+                if (Math.abs(this.positionError.x) < 0.01) this.positionError.x = 0;
+                if (Math.abs(this.positionError.y) < 0.01) this.positionError.y = 0;
+            } else {
+                // Interpolate other players based on snapshot arrival time
+                const prev = this.previousPositions.get(playerId);
+                const timestamp = this.snapshotTimestamps.get(playerId);
+
+                if (prev && timestamp) {
+                    const elapsed = now - timestamp;
+                    const interval = this.simulation.ticker.intervalMs;
+                    const alpha = Math.min(elapsed / interval, 1.0);
+
+                    x = lerp(prev.x, player.x, alpha);
+                    y = lerp(prev.y, player.y, alpha);
+                }
             }
 
             this.ctx.fillStyle = player.color;

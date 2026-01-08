@@ -17,7 +17,7 @@ export const WORLD_WIDTH = 800;
 export const WORLD_HEIGHT = 600;
 export const PLAYER_SIZE = 20;
 export const PLAYER_SPEED = 200;
-export const TICK_RATE = 12;
+export const TICK_RATE = 15;
 export const WS_PORT = 3007;
 
 /* ================================
