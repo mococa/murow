@@ -134,6 +134,17 @@ export class FixedTicker {
   get accumulatedTime(): number {
     return this.accumulator / 1000; // Convert to seconds
   }
+
+  /**
+   * @description
+   * Returns the interpolation factor between 0 and 1 for smooth rendering between ticks.
+   * Clamped to prevent extrapolation when ticks are skipped.
+   *
+   * @returns {number} Alpha value between 0 and 1
+   */
+  get alpha(): number {
+    return Math.min(this.accumulatedTime / (1 / this.rate), 1.0);
+  }
 }
 
 interface FixedTickerProps {

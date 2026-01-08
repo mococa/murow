@@ -36,8 +36,8 @@ const ticker = new FixedTicker({
 function gameLoop(deltaTime: number) {
   ticker.tick(deltaTime);
 
-  // Optional: interpolate visuals using accumulatedTime
-  const alpha = ticker.accumulatedTime / (1 / 30); // for smooth rendering
+  // Optional: interpolate visuals using alpha (0-1)
+  render(ticker.alpha); // for smooth rendering between ticks
 }
 ```
 
@@ -45,7 +45,7 @@ function gameLoop(deltaTime: number) {
 
 - This class does not automatically guarantee determinism; your game logic must also be deterministic (e.g., using seeded random numbers and consistent math operations).
 - For lockstep multiplayer, always use the tickCount to synchronize inputs and simulation steps.
-- Use accumulatedTime for smooth client-side rendering between fixed ticks.
+- Use `ticker.alpha` for smooth client-side rendering between fixed ticks (automatically clamped to prevent extrapolation).
 
 ## Example: Deterministic Multiplayer Loop
 
@@ -61,7 +61,7 @@ const ticker = new FixedTicker({
 // in browser
 function frame(deltaTime: number) {
   ticker.tick(deltaTime);
-  render(interpolate(ticker.accumulatedTime));
+  render(interpolate(ticker.alpha));
 }
 
 // in Node.js
