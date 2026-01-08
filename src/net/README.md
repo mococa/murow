@@ -314,6 +314,10 @@ class MyTransport implements TransportAdapter {
     // Send binary data through your transport
   }
 
+  onOpen?(handler: () => void): void {
+    // Register open handler (optional - if omitted, assumes already connected)
+  }
+
   onMessage(handler: (data: Uint8Array) => void): void {
     // Register message handler
   }
