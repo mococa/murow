@@ -43,7 +43,7 @@ export class GameClient {
 
     // Error smoothing for own player
     positionError = { x: 0, y: 0 };
-    readonly errorSmoothingFactor = 0.3; // Increased for faster smoothing
+    readonly errorSmoothingFactor = 0.05; // Increased for faster smoothing
     positionBeforeReconciliation = { x: 0, y: 0 };
 
     // Interpolation for own player
@@ -72,50 +72,63 @@ export class GameClient {
         // Hook into tick event to apply input and send intents
         this.simulation.events.on('tick', ({ tick }) => this.tick(tick));
 
+        // Temporary variables for reconciliation
+        let tempServerX = 0;
+        let tempServerY = 0;
+
         this.reconciler = new Reconciliator({
             onLoadState: (state) => {
-                // Store position before reconciliation to calculate error after
                 const myPlayer = this.simulation.players.get(this.myId!);
                 if (myPlayer && this.myId) {
                     this.positionBeforeReconciliation.x = myPlayer.x;
                     this.positionBeforeReconciliation.y = myPlayer.y;
                 }
 
+                // Extract server position without applying it
+                const serverState = state.find((p: any) => p.id === this.myId);
+                if (serverState) {
+                    tempServerX = serverState.x;
+                    tempServerY = serverState.y;
+                }
+
                 this.loadSnapshot(state);
             },
             onReplay: (intents) => {
-                if (intents.length > 0) {
-                    console.log(`Replaying ${intents.length} intents for prediction correction.`);
-                }
+                if (!this.myId) return;
+                const myPlayer = this.simulation.players.get(this.myId);
+                if (!myPlayer) return;
 
-                // Replay each intent: apply velocity + step
-                // This must match the tick() logic exactly
+                // Save current visual position
+                const visualX = myPlayer.x;
+                const visualY = myPlayer.y;
+
+                // Apply server state and replay
+                myPlayer.x = tempServerX;
+                myPlayer.y = tempServerY;
+                myPlayer.vx = 0;
+                myPlayer.vy = 0;
+
                 for (const intent of intents) {
-                    this.simulation.applyVelocity(this.myId!, intent);
+                    this.simulation.applyVelocity(this.myId, intent);
                     this.simulation.step();
                 }
 
-                // After replay, calculate the correction error
-                const myPlayer = this.simulation.players.get(this.myId!);
-                if (myPlayer) {
-                    const errorX = this.positionBeforeReconciliation.x - myPlayer.x;
-                    const errorY = this.positionBeforeReconciliation.y - myPlayer.y;
-                    const errorMagnitude = Math.hypot(errorX, errorY);
+                // Calculate error
+                const errorX = visualX - myPlayer.x;
+                const errorY = visualY - myPlayer.y;
+                const errorMagnitude = Math.hypot(errorX, errorY);
 
-                    // Only apply error smoothing if error is significant (> 0.5px)
-                    // This prevents accumulating tiny floating-point errors
-                    if (errorMagnitude > 0.5) {
-                        this.positionError.x = errorX;
-                        this.positionError.y = errorY;
+                if (errorMagnitude > 0.5) {
+                    this.positionError.x = errorX;
+                    this.positionError.y = errorY;
 
-                        // Don't interpolate immediately after reconciliation - wait for next tick
-                        this.shouldInterpolate = false;
-
-                        if (errorMagnitude > 5) {
-                            console.warn(`Large prediction error: ${errorMagnitude.toFixed(2)}px, replayed ${intents.length} intents, before=(${this.positionBeforeReconciliation.x.toFixed(1)}, ${this.positionBeforeReconciliation.y.toFixed(1)}), after=(${myPlayer.x.toFixed(1)}, ${myPlayer.y.toFixed(1)})`);
-                        }
+                    if (errorMagnitude > 5) {
+                        console.warn(`Prediction error: ${errorMagnitude.toFixed(2)}px`);
                     }
                 }
+
+                // DON'T update myPreviousPosition or lastTickTime here
+                // Let the normal tick event handle that, otherwise we disrupt interpolation
             },
         });
 
@@ -140,6 +153,7 @@ export class GameClient {
                 heartbeatInterval: 0,
                 maxSendQueueSize: 1024 * 1024, // 1 MB
                 maxMessagesPerSecond: 0,
+                lagSimulation: 0,
             },
         });
 
@@ -261,10 +275,11 @@ export class GameClient {
             }
 
             if (p.id === this.myId) {
-                // Apply server position (reconciliation will replay from here)
-                // Error calculation happens in onReplay callback after replay completes
-                player.x = p.x;
-                player.y = p.y;
+                // For own player: only update on first spawn
+                if (player.x === 0 && player.y === 0) {
+                    player.x = p.x;
+                    player.y = p.y;
+                }
             } else {
                 // Store previous position before updating (for interpolation)
                 this.previousPositions.set(p.id, { x: player.x, y: player.y });
