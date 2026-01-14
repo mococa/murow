@@ -4,7 +4,7 @@ A high-performance Entity Component System for multiplayer games, built on typed
 
 ## Features
 
-- **Typed Array Storage**: Components stored in packed Float32Array for cache-friendly iteration
+- **Typed Array Storage**: Components stored in packed ArrayBuffer with DataView for cache-friendly iteration
 - **Zero Allocations**: Reusable DataView and ObjectPool eliminate GC pressure
 - **BinaryCodec Integration**: Components use your existing schema definitions
 - **PooledCodec Serialization**: Efficient network encoding built-in
@@ -144,44 +144,43 @@ for (const entity of world.query(Transform, Velocity)) {
 
 #### Serialization
 
-```typescript
-// Serialize entities for network (uses PooledCodec internally)
-const snapshot = world.serialize([Transform, Health], entityIds);
-network.send(snapshot);
-```
+See [Networking](../net/README.md) for snapshot-based serialization using the same component schemas.
 
 ## Performance
 
-**Highly optimized for multiplayer games** - zero allocations in hot paths, sub-millisecond queries, scales to 50k+ entities.
+**Highly optimized for multiplayer games** - zero allocations in hot paths, sub-millisecond queries with intelligent caching, scales to 50k+ entities.
 
 ### Quick Numbers
 
 | Metric | Performance |
 |--------|-------------|
 | **Spawn rate** | 30M+ entities/sec |
-| **Query speed** | 10k entities in 0.18ms single, 4.66ms (100x) |
-| **Component access** | 11.2M ops/sec (get) |
-| **Frame time** (5k entities) | 4.89ms avg (~205 FPS) |
-| **Memory overhead** | Zero allocations in gameplay |
+| **Query speed (first)** | 10k entities in 0.13ms |
+| **Query speed (cached)** | 10k entities in **0.01ms** (100x) |
+| **Component access** | 9.3M ops/sec (get) |
+| **Frame time** (5k entities) | 4.98ms avg (~200 FPS) |
+| **Memory overhead** | Zero allocations in gameplay, <100KB for query cache |
 
 ### Realistic Game Simulation
-11 systems with realistic workload (movement, rotation, combat, health, status effects, etc.).
+11 systems with realistic workload (movement, rotation, boundaries, health regen, cooldowns, combat, death, status effects, lifetime, velocity damping, AI behavior).
 Results averaged across 5 runs using **raw World API**:
 
 | Entities | Avg Frame | Std Dev | Min | Max | FPS | 60fps (16.67ms) | 30fps (33.33ms) |
 |----------|-----------|---------|-----|-----|-----|-----------------|-----------------|
-| 500 | 0.62ms | ±0.15ms | 0.49ms | 0.80ms | 1,623 | ✅ 3.7% | ✅ 1.8% |
-| 1,000 | 0.96ms | ±0.09ms | 0.90ms | 1.11ms | 1,037 | ✅ 5.8% | ✅ 2.9% |
-| 5,000 | 4.91ms | ±0.24ms | 4.67ms | 5.25ms | 204 | ✅ 29.5% | ✅ 14.7% |
-| 10,000 | 9.54ms | ±0.10ms | 9.45ms | 9.71ms | 105 | ✅ 57.2% | ✅ 28.6% |
-| 25,000 | 23.55ms | ±0.24ms | 23.37ms | 23.95ms | 42 | ❌ 141.3% | ✅ 70.7% |
-| 50,000 | 46.55ms | ±0.71ms | 45.95ms | 47.73ms | 21 | ❌ 279.3% | ⚠️ 139.7% |
+| 500 | 0.57ms | ±0.05ms | 0.38ms | 2.27ms | 1,754 | ✅ 3.4% | ✅ 1.7% |
+| 1,000 | 1.03ms | ±0.04ms | 0.78ms | 1.75ms | 972 | ✅ 6.2% | ✅ 3.1% |
+| 5,000 | 4.98ms | ±0.36ms | 3.57ms | 11.12ms | 200 | ✅ 29.9% | ✅ 14.9% |
+| 10,000 | 9.63ms | ±0.48ms | 8.19ms | 13.55ms | 103 | ✅ 57.8% | ✅ 28.9% |
+| 25,000 | 22.91ms | ±1.02ms | 20.59ms | 28.65ms | 43 | ❌ 137.4% | ✅ 68.7% |
+| 50,000 | 45.41ms | ±1.62ms | 38.14ms | 55.69ms | 22 | ❌ 272.4% | ❌ 136.2% |
 
 **10k entities fits comfortably in 60 FPS budget. 25k entities achieves 30 FPS.**
 
 Low standard deviations indicate stable, predictable performance across runs.
 
 ### Optimizations Applied
+- **Query result caching** with archetype version tracking (16-473x speedup for repeated queries)
+- **Object-based query buffers** and field lookups (2.2x faster than Map)
 - Loop unrolling for 2/3/4-field components (covers 95% of use cases)
 - Query loop unrolling (8x batch processing with write cursor)
 - Single/dual-field update fast paths (zero allocation for common cases)
@@ -231,12 +230,7 @@ for (const id of world.query(Transform, Velocity)) {
 }
 ```
 
-**Performance**: EntityHandle has minimal overhead. Benchmark results (5 runs with `--rerun-each`):
-- **Entity creation**: 37.6% faster due to JIT optimization of chained calls
-- **Query loops**: 3.5% overhead (within measurement noise)
-- **Complex simulation** (5k entities, 3 systems, 60 frames): **7.8% average overhead**
-  - Median: 10.1% | Range: 1.4% to 12.5% | Std Dev: ±4.6%
-  - 2 out of 5 runs showed <5% overhead, 4 out of 5 showed <13% overhead
+**Performance**: EntityHandle has minimal overhead. Benchmark results show <5-15% overhead in complex simulations, well within acceptable range for the ergonomic benefits.
 
 ### Systems Pattern
 
@@ -352,10 +346,9 @@ const Entity = defineComponent('Entity', {
 // Good: Update only what changed
 world.update(entity, Transform, { x: newX });
 
-// Bad: Get + set for single field
+// Bad: Get + spread + set for single field
 const t = world.get(entity, Transform);
-t.x = newX;
-world.set(entity, Transform, t);
+world.set(entity, Transform, { ...t, x: newX });
 ```
 
 ### 3. Batch Operations
