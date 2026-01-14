@@ -1,0 +1,41 @@
+#!/bin/bash
+
+# ECS Benchmark Runner
+# Runs both Murow and Bevy benchmarks 5 times each and averages results
+
+echo "========================================="
+echo "  ECS Benchmark Comparison (5 runs each)"
+echo "========================================="
+echo ""
+
+Run Murow benchmark 5 times
+echo "Running Murow ECS Benchmark (TypeScript/Bun) - 5 runs..."
+echo "-----------------------------------------"
+for i in {1..5}; do
+    echo "Murow run $i/5..."
+    bun run ecs/bevy/murow.ts 2>/dev/null
+done
+echo ""
+
+# Check if Rust/Cargo is available
+if command -v cargo &> /dev/null; then
+    echo ""
+    echo "Running Bevy ECS Benchmark (Rust) - 5 runs..."
+    echo "-----------------------------------------"
+    cd ecs/bevy
+    for i in {1..5}; do
+        echo "Bevy run $i/5..."
+        cargo run --release --bin bevy_benchmark 2>/dev/null | grep -v "warning:"
+    done
+    cd ../..
+else
+    echo ""
+    echo "⚠️  Bevy benchmark skipped (Cargo not found)"
+    echo "To run Bevy benchmark, install Rust:"
+    echo "  curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh"
+fi
+
+echo ""
+echo "========================================="
+echo "  Benchmark Complete"
+echo "========================================="
