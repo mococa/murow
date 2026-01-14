@@ -24,7 +24,7 @@ export class ComponentStore<T extends object> {
   private fieldOffsets: number[];
   private fields: any[];
   private fieldKeys: (keyof T)[];
-  private fieldIndexMap: Map<keyof T, number>; // For O(1) field lookup in update()
+  private fieldIndexMap: Record<string, number>; // For O(1) field lookup in update()
 
   constructor(component: Component<T>, maxEntities: number) {
     this.component = component;
@@ -41,7 +41,7 @@ export class ComponentStore<T extends object> {
     this.fieldKeys = component.fieldNames;
     this.fieldOffsets = [];
     this.fields = [];
-    this.fieldIndexMap = new Map();
+    this.fieldIndexMap = {};
 
     let offset = 0;
     for (let i = 0; i < this.fieldKeys.length; i++) {
@@ -49,7 +49,7 @@ export class ComponentStore<T extends object> {
       const field = component.schema[key];
       this.fieldOffsets.push(offset);
       this.fields.push(field);
-      this.fieldIndexMap.set(key, i);
+      this.fieldIndexMap[key as string] = i;
       offset += field.size;
     }
 
@@ -182,7 +182,7 @@ export class ComponentStore<T extends object> {
 
     if (keyCount === 1) {
       const key = keys[0];
-      const i = this.fieldIndexMap.get(key)!;
+      const i = this.fieldIndexMap[key as string];
       this.fields[i].write(
         this.view,
         baseOffset + this.fieldOffsets[i],
@@ -195,8 +195,8 @@ export class ComponentStore<T extends object> {
     if (keyCount === 2) {
       const key0 = keys[0];
       const key1 = keys[1];
-      const i0 = this.fieldIndexMap.get(key0)!;
-      const i1 = this.fieldIndexMap.get(key1)!;
+      const i0 = this.fieldIndexMap[key0 as string];
+      const i1 = this.fieldIndexMap[key1 as string];
       this.fields[i0].write(this.view, baseOffset + this.fieldOffsets[i0], partial[key0]!);
       this.fields[i1].write(this.view, baseOffset + this.fieldOffsets[i1], partial[key1]!);
       return;
@@ -205,7 +205,7 @@ export class ComponentStore<T extends object> {
     // Generic path for multiple fields
     for (let j = 0; j < keyCount; j++) {
       const key = keys[j];
-      const i = this.fieldIndexMap.get(key)!;
+      const i = this.fieldIndexMap[key as string];
       this.fields[i].write(
         this.view,
         baseOffset + this.fieldOffsets[i],
