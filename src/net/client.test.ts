@@ -547,7 +547,7 @@ describe("ClientNetwork", () => {
 	});
 
 	describe("Memory pooling", () => {
-		test("should reuse pooled objects across snapshots", () => {
+		test("should reuse pooled objects across snapshots (zero-copy)", () => {
 			const transport = new MockTransportAdapter();
 			const client = new ClientNetwork<GameSnapshots>({
 				transport,
@@ -556,11 +556,17 @@ describe("ClientNetwork", () => {
 				config: { debug: false },
 			});
 
-			const receivedSnapshots: Array<Snapshot<PlayerUpdate>> = [];
+			// Extract data immediately (correct pattern for zero-copy)
+			const extractedData: Array<{ tick: number; x: number; y: number; health: number }> = [];
 
 			client.onSnapshot<PlayerUpdate>("player", (snapshot) => {
-				// Store the snapshot - this should be safe due to shallow copy
-				receivedSnapshots.push(snapshot);
+				// CORRECT: Extract data immediately, don't store references
+				extractedData.push({
+					tick: snapshot.tick,
+					x: snapshot.updates.x!,
+					y: snapshot.updates.y!,
+					health: snapshot.updates.health!,
+				});
 			});
 
 			// Simulate opening connection
@@ -587,25 +593,22 @@ describe("ClientNetwork", () => {
 			if (transport.messageHandler) transport.messageHandler(snapshot2);
 
 			// Verify both snapshots were received correctly
-			expect(receivedSnapshots.length).toBe(2);
+			expect(extractedData.length).toBe(2);
 
-			// First snapshot should maintain its original values
-			expect(receivedSnapshots[0].tick).toBe(1);
-			expect(receivedSnapshots[0].updates.x).toBe(10);
-			expect(receivedSnapshots[0].updates.y).toBe(20);
-			expect(receivedSnapshots[0].updates.health).toBe(100);
+			// First snapshot data should be correct
+			expect(extractedData[0].tick).toBe(1);
+			expect(extractedData[0].x).toBe(10);
+			expect(extractedData[0].y).toBe(20);
+			expect(extractedData[0].health).toBe(100);
 
-			// Second snapshot should have its own values
-			expect(receivedSnapshots[1].tick).toBe(2);
-			expect(receivedSnapshots[1].updates.x).toBe(15);
-			expect(receivedSnapshots[1].updates.y).toBe(25);
-			expect(receivedSnapshots[1].updates.health).toBe(90);
-
-			// The updates objects should be different references (shallow copy worked)
-			expect(receivedSnapshots[0].updates).not.toBe(receivedSnapshots[1].updates);
+			// Second snapshot data should be correct
+			expect(extractedData[1].tick).toBe(2);
+			expect(extractedData[1].x).toBe(15);
+			expect(extractedData[1].y).toBe(25);
+			expect(extractedData[1].health).toBe(90);
 		});
 
-		test("handlers can safely store references to snapshot.updates", () => {
+		test("handlers must extract data immediately (zero-copy pattern)", () => {
 			const transport = new MockTransportAdapter();
 			const client = new ClientNetwork<GameSnapshots>({
 				transport,
@@ -614,12 +617,21 @@ describe("ClientNetwork", () => {
 				config: { debug: false },
 			});
 
-			// Simulate a reconciliator-like usage pattern
-			let storedState: Partial<PlayerUpdate> | null = null;
+			// Simulate a reconciliator-like usage pattern (correct way)
+			interface ExtractedState {
+				x: number;
+				y: number;
+				health: number;
+			}
+			let extractedState: ExtractedState | null = null;
 
 			client.onSnapshot<PlayerUpdate>("player", (snapshot) => {
-				// Store the state directly (common pattern in reconciliation)
-				storedState = snapshot.updates;
+				// CORRECT: Extract data immediately instead of storing references
+				extractedState = {
+					x: snapshot.updates.x!,
+					y: snapshot.updates.y!,
+					health: snapshot.updates.health!,
+				};
 			});
 
 			// Simulate opening connection
@@ -635,8 +647,10 @@ describe("ClientNetwork", () => {
 			snapshot1.set(snapshot1Data, 1);
 			if (transport.messageHandler) transport.messageHandler(snapshot1);
 
-			const firstState = storedState as unknown as Partial<PlayerUpdate>;
-			expect(firstState?.x).toBe(10);
+			const firstState = extractedState!;
+			expect(firstState.x).toBe(10);
+			expect(firstState.y).toBe(20);
+			expect(firstState.health).toBe(100);
 
 			// Send second snapshot (wrap with MessageType.SNAPSHOT header)
 			const snapshot2Data = snapshotRegistry.encode("player", {
@@ -648,15 +662,15 @@ describe("ClientNetwork", () => {
 			snapshot2.set(snapshot2Data, 1);
 			if (transport.messageHandler) transport.messageHandler(snapshot2);
 
-			// First stored state should NOT be mutated by the second snapshot
-			expect(firstState?.x).toBe(10);
-			expect(firstState?.y).toBe(20);
-			expect(firstState?.health).toBe(100);
+			// First extracted state should NOT be mutated (we extracted primitives)
+			expect(firstState.x).toBe(10);
+			expect(firstState.y).toBe(20);
+			expect(firstState.health).toBe(100);
 
-			// New stored state should have the new values
-			expect((storedState as unknown as Partial<PlayerUpdate>)?.x).toBe(99);
-			expect((storedState as unknown as Partial<PlayerUpdate>)?.y).toBe(99);
-			expect((storedState as unknown as Partial<PlayerUpdate>)?.health).toBe(50);
+			// New extracted state should have the new values
+			expect(extractedState!.x).toBe(99);
+			expect(extractedState!.y).toBe(99);
+			expect(extractedState!.health).toBe(50);
 		});
 	});
 

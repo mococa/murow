@@ -111,16 +111,19 @@ class GameServer {
             const { x, y, color } = this.simulation.spawn(rpc.id);
             this.playerIds.set(peerId, rpc.id);
 
-            this.network.sendRPC(
-                peerId,
-                RPCs.PlayerSpawned,
-                {
-                    id: rpc.id,
-                    x,
-                    y,
-                    color,
-                },
-            );
+            // Broadcast PlayerSpawned to ALL peers (including the requester)
+            for (const targetPeerId of this.network.getPeerIds()) {
+                this.network.sendRPC(
+                    targetPeerId,
+                    RPCs.PlayerSpawned,
+                    {
+                        id: rpc.id,
+                        x,
+                        y,
+                        color,
+                    },
+                );
+            }
 
             // Send initial game state to the new player
             const gameState = this.simulation.getSnapshot();

@@ -493,22 +493,20 @@ export class ClientNetwork<TSnapshots = unknown> {
 
 	/**
 	 * Decode and handle a snapshot from server
+	 *
+	 * IMPORTANT: Handlers receive the pooled object directly (zero-copy).
+	 * Handlers MUST extract any data they need immediately - do NOT store references to the snapshot.updates object.
+	 * The object will be released back to the pool after all handlers complete.
 	 */
 	private handleSnapshot(data: Uint8Array): void {
 		try {
 			// Decode using snapshot registry (returns { type, snapshot })
 			const decoded = this.snapshotRegistry.decode<Partial<TSnapshots>>(data);
 
-			// Save reference to pooled object before replacing it
-			const pooledUpdates = decoded.snapshot.updates;
-
-			// Shallow copy the updates to allow handlers to store references safely
-			// This prevents issues when the pooled object is reused for the next snapshot
-			decoded.snapshot.updates = { ...decoded.snapshot.updates };
-
 			this.log(`Received snapshot (type: ${decoded.type}, tick: ${decoded.snapshot.tick})`);
 
 			// Call all type-specific handlers if registered
+			// HANDLERS MUST NOT STORE REFERENCES - extract data immediately!
 			const handlers = this.snapshotHandlers.get(decoded.type);
 			if (handlers && handlers.length > 0) {
 				for (const handler of handlers) {
@@ -522,9 +520,9 @@ export class ClientNetwork<TSnapshots = unknown> {
 				this.log(`No handler registered for snapshot type: ${decoded.type}`);
 			}
 
-			// Release the original pooled object back to the pool
-			// This enables efficient memory reuse across snapshot updates
-			this.snapshotRegistry.release(decoded.type, pooledUpdates);
+			// Release the pooled object back to the pool
+			// This enables efficient memory reuse across snapshot updates (zero GC pressure)
+			this.snapshotRegistry.release(decoded.type, decoded.snapshot.updates);
 		} catch (error) {
 			this.log(`Failed to decode snapshot: ${error}`);
 		}
@@ -532,6 +530,10 @@ export class ClientNetwork<TSnapshots = unknown> {
 
 	/**
 	 * Handle incoming RPC message from server
+	 *
+	 * IMPORTANT: Handlers receive the pooled object directly (zero-copy).
+	 * Handlers MUST extract any data they need immediately - do NOT store references to the RPC data object.
+	 * The object will be released back to the pool after all handlers complete.
 	 */
 	private handleRPC(data: Uint8Array): void {
 		if (!this.rpcRegistry) {
@@ -543,16 +545,10 @@ export class ClientNetwork<TSnapshots = unknown> {
 			// Decode using RPC registry (returns { method, data })
 			const decoded = this.rpcRegistry.decode(data);
 
-			// Save reference to pooled object before replacing it
-			const pooledData = decoded.data;
-
-			// Shallow copy the data to allow handlers to store references safely
-			// This prevents issues when the pooled object is reused for the next RPC
-			decoded.data = { ...decoded.data };
-
 			this.log(`Received RPC (method: ${decoded.method})`);
 
 			// Call all method-specific handlers if registered
+			// HANDLERS MUST NOT STORE REFERENCES - extract data immediately!
 			const handlers = this.rpcHandlers.get(decoded.method);
 			if (handlers && handlers.length > 0) {
 				for (const handler of handlers) {
@@ -566,9 +562,9 @@ export class ClientNetwork<TSnapshots = unknown> {
 				this.log(`No handler registered for RPC method: ${decoded.method}`);
 			}
 
-			// Release the original pooled object back to the pool
-			// This enables efficient memory reuse across RPC calls
-			this.rpcRegistry.release(decoded.method, pooledData);
+			// Release the pooled object back to the pool
+			// This enables efficient memory reuse across RPC calls (zero GC pressure)
+			this.rpcRegistry.release(decoded.method, decoded.data);
 		} catch (error) {
 			this.log(`Failed to decode RPC: ${error}`);
 		}
