@@ -153,35 +153,13 @@ export class ComponentStore<T extends object> {
 
   /**
    * Update specific fields of a component.
+   * Optimized to avoid Object.keys() allocation in hot path.
    */
   update(entityId: number, partial: Partial<T>): void {
-    // Fast path for single field update
-    const keys = Object.keys(partial) as (keyof T)[];
-    const keyCount = keys.length;
-
-    if (keyCount === 1) {
-      const key = keys[0];
-      const i = this.fieldIndexMap[key as string];
-      this.arrays[i][entityId] = partial[key] as any;
-      return;
-    }
-
-    // Fast path for two field update
-    if (keyCount === 2) {
-      const key0 = keys[0];
-      const key1 = keys[1];
-      const i0 = this.fieldIndexMap[key0 as string];
-      const i1 = this.fieldIndexMap[key1 as string];
-      this.arrays[i0][entityId] = partial[key0] as any;
-      this.arrays[i1][entityId] = partial[key1] as any;
-      return;
-    }
-
-    // Generic path for multiple fields
-    for (let j = 0; j < keyCount; j++) {
-      const key = keys[j];
-      const i = this.fieldIndexMap[key as string];
-      this.arrays[i][entityId] = partial[key] as any;
+    // Direct iteration
+    for (const key in partial) {
+      const i = this.fieldIndexMap[key];
+      this.arrays[i][entityId] = partial[key as keyof T] as any;
     }
   }
 
