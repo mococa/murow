@@ -20,141 +20,126 @@ type ExtractFieldMapping<T> = T extends Record<string, readonly any[]>
   : never;
 
 /**
- * Build entity proxy from components and field mappings.
- * Maps each alias to an object with the specified fields from the corresponding component.
+ * Build flattened entity proxy from components and field mappings.
+ * Maps fields directly as alias_field (e.g., transform_x, velocity_vx)
+ * This eliminates one property lookup for maximum performance.
  */
-type BuildEntityProxy<
+export type BuildEntityProxy<
   Components extends readonly Component<any>[],
   FieldMappings extends readonly any[]
 > = {
-  [Index in keyof FieldMappings as ExtractFieldMapping<FieldMappings[Index]>["alias"]]: Index extends keyof Components
+  eid: number;
+} & UnionToIntersection<{
+  [Index in keyof FieldMappings]: Index extends keyof Components
     ? Components[Index] extends Component<any>
       ? ExtractFieldMapping<FieldMappings[Index]>["fields"] extends readonly (keyof InferComponentData<Components[Index]>)[]
         ? {
-            [F in ExtractFieldMapping<FieldMappings[Index]>["fields"][number]]: F extends keyof InferComponentData<Components[Index]>
+            [F in ExtractFieldMapping<FieldMappings[Index]>["fields"][number] as `${ExtractFieldMapping<FieldMappings[Index]>["alias"] & string}_${F & string}`]: F extends keyof InferComponentData<Components[Index]>
               ? InferComponentData<Components[Index]>[F]
               : never
           }
         : never
       : never
     : never
-};
+}[keyof FieldMappings]>;
+
+// Helper type to convert union to intersection
+type UnionToIntersection<U> = (U extends any ? (x: U) => void : never) extends (x: infer I) => void ? I : never;
 
 /**
  * Builder for creating ergonomic systems with automatic field array caching.
  *
- * Provides a fluent API that compiles down to RAW API performance:
+ * Fully chainable API with type safety:
  * - User writes ergonomic code with entity.component.field syntax
  * - System automatically caches TypedArrays and creates proxies
  * - Runtime performance matches direct array access
- * - Fully type-safe with IntelliSense support
+ * - Full type safety with IntelliSense support
  *
- * @example
+ * **Recommended pattern for full type safety:**
  * ```typescript
- * world
- *   .addSystem()
+ * world.addSystem()
  *   .with(Transform2D, Velocity)
- *   .fields([
- *     { transform2d: ['x', 'y'] },
- *     { velocity: ['vx', 'vy'] }
- *   ])
+ *   .fields([{ transform2d: ['x', 'y'] }, { velocity: ['vx', 'vy'] }])
  *   .run((entity, deltaTime) => {
  *     // entity.transform2d and entity.velocity are fully typed!
  *     entity.transform2d.x += entity.velocity.vx * deltaTime;
- *     entity.transform2d.y += entity.velocity.vy * deltaTime;
  *   });
  * ```
+ *
+ * **Note:** If you provide the callback first (before fields), the entity parameter
+ * will be typed as `any` due to TypeScript limitations. Use `.with().fields().run()`
+ * for full type safety.
  */
-export class SystemBuilder<C extends Component<any>[]> {
+export class SystemBuilder<
+  C extends Component<any>[] = Component<any>[],
+  FM extends any[] | undefined = undefined,
+  CB extends boolean = false
+> {
   constructor(
     private world: World,
-    private components: C
+    private components: C,
+    private fieldMappings?: FM,
+    private userCallback?: (entity: any, deltaTime: number, world: World) => void
   ) {}
 
   /**
    * Specify which components this system should query for.
-   *
-   * @param components - Components to query
-   * @returns This builder for chaining with updated component types
-   *
-   * @example
-   * ```typescript
-   * .with(Transform2D, Velocity)
-   * ```
    */
-  with<NewC extends Component<any>[]>(...components: NewC): SystemBuilder<NewC> {
-    (this as any).components = components;
-    return this as any;
+  query<NewC extends Component<any>[]>(
+    ...components: NewC
+  ): SystemBuilder<NewC, FM, CB> {
+    return new SystemBuilder(this.world, components, this.fieldMappings, this.userCallback);
   }
 
   /**
    * Specify which component fields should be accessible via proxy.
-   *
-   * Pass an array of objects mapping aliases to field arrays.
-   * Each object corresponds to a component in with() by index.
-   *
-   * Fully type-safe: field names are checked against component schemas,
-   * and the entity proxy type is inferred from the mappings.
-   *
-   * @param fieldMappings - Array of { alias: [fields] } objects, one per component
-   * @returns Executable system
-   *
-   * @example
-   * ```typescript
-   * .with(Transform2D, Velocity)
-   * .fields([
-   *   { transform2d: ['x', 'y'] },
-   *   { velocity: ['vx', 'vy'] }
-   * ])
-   * ```
    */
   fields<
-    const FM extends {
+    const NewFM extends {
       [K in keyof C]: C[K] extends Component<infer T>
         ? Record<string, readonly (keyof T)[]>
         : never
     }
   >(
-    fieldMappings: FM
-  ): TypedSystemBuilder<C, FM> {
-    return new TypedSystemBuilder(this.world, this.components, fieldMappings);
-  }
-}
-
-/**
- * Typed system builder that knows the entity proxy type.
- * Created after fields() is called with concrete field mappings.
- */
-class TypedSystemBuilder<C extends Component<any>[], FM extends any[]> {
-  constructor(
-    private world: World,
-    private components: C,
-    private fieldMappings: FM
-  ) {}
-
-  /**
-   * Set the system callback with full type safety.
-   *
-   * @param callback - Function that receives typed entity proxy and deltaTime
-   * @returns Executable system
-   */
-  run(callback: (entity: BuildEntityProxy<C, FM>, deltaTime: number) => void): ExecutableSystem {
-    // Build the executable system
-    const system = this.buildSystem(this.fieldMappings as any, callback as any);
-
-    // Register with world
-    this.world._registerSystem(system);
-
-    return system;
+    fieldMappings: NewFM
+  ): SystemBuilder<C, NewFM, CB> {
+    return new SystemBuilder(this.world, this.components, fieldMappings as any, this.userCallback);
   }
 
   /**
-   * Build the executable system with cached field arrays and proxy entity.
-   * @private
+   * Set the system callback. If components and fields are set, builds the system.
    */
-  private buildSystem(fieldMappings: any[], userCallback: (entity: any, deltaTime: number) => void): ExecutableSystem {
+  run(
+    callback: FM extends undefined
+      ? (entity: any, deltaTime: number, world: World) => void
+      : (entity: BuildEntityProxy<C, FM>, deltaTime: number, world: World) => void
+  ): ExecutableSystem {
+    const builder = new SystemBuilder(
+      this.world,
+      this.components,
+      this.fieldMappings,
+      callback as any
+    );
+
+    return builder.buildAndRegister();
+  }
+
+  /**
+   * Build and register the system.
+   * @internal
+   */
+  buildAndRegister(): ExecutableSystem {
+    if (!this.userCallback) {
+      throw new Error('System callback must be set');
+    }
+    if (!this.fieldMappings) {
+      throw new Error('Field mappings must be set');
+    }
+
     const world = this.world;
     const components = this.components;
+    const fieldMappings = this.fieldMappings;
+    const userCallback = this.userCallback;
 
     // Cache field arrays once at system creation
     const fieldArrayCache: Record<string, Record<string, any>> = {};
@@ -182,13 +167,18 @@ class TypedSystemBuilder<C extends Component<any>[], FM extends any[]> {
     }
 
     // Create the executable system
-    return new ExecutableSystem(
+    const system = new ExecutableSystem(
       world,
       components,
       userCallback,
       fieldArrayCache,
       componentByAlias
     );
+
+    // Register with world
+    world._registerSystem(system);
+
+    return system;
   }
 }
 
@@ -198,62 +188,75 @@ class TypedSystemBuilder<C extends Component<any>[], FM extends any[]> {
  * Contains cached field arrays and generates proxy entities for ergonomic access.
  */
 export class ExecutableSystem {
-  private currentEid: Entity = 0;
+  private proxyEntity: any;
+  // Mutable box for currentEid - allows monomorphic inline caching
+  private eidBox = { value: 0 };
 
   constructor(
     private world: World,
     private components: Component<any>[],
-    private userCallback: (entity: any, deltaTime: number) => void,
+    private userCallback: (entity: any, deltaTime: number, world: World) => void,
     private fieldArrayCache: Record<string, Record<string, any>>,
     private componentByAlias: Record<string, Component<any>>
-  ) {}
+  ) {
+    // Create proxy once and reuse it - major performance win
+    this.proxyEntity = this.createProxyEntity();
+  }
 
   /**
    * Execute the system for all matching entities.
+   * Optimized to reuse proxy entity and minimize allocations.
    *
    * @param deltaTime - Time delta to pass to system callback
    */
   execute(deltaTime: number): void {
     const entities = this.world.query(...this.components);
-    const proxyEntity = this.createProxyEntity();
+    const proxyEntity = this.proxyEntity;
+    const callback = this.userCallback;
+    const world = this.world;
+    const eidBox = this.eidBox;
 
-    for (let i = 0; i < entities.length; i++) {
-      const eid = entities[i]!;
-      this.currentEid = eid;
-      this.userCallback(proxyEntity, deltaTime);
+    // Hoist array length lookup for better JIT optimization
+    const length = entities.length;
+    for (let i = 0; i < length; i++) {
+      eidBox.value = entities[i]!;
+      callback(proxyEntity, deltaTime, world);
     }
   }
 
   /**
-   * Create a proxy entity that maps field access to direct array access.
+   * Create a proxy entity with FLATTENED properties for maximum performance.
+   * Instead of entity.transform.x, use entity.transform_x (one lookup instead of two).
    * @private
    */
   private createProxyEntity(): any {
+    const eidBox = this.eidBox;
     const entity: any = {};
-    const currentEidGetter = () => this.currentEid;
 
-    // Create proxy for each component alias
+    // Add eid property
+    Object.defineProperty(entity, 'eid', {
+      get() { return eidBox.value; },
+      enumerable: true,
+      configurable: false
+    });
+
+    // Define FLATTENED field getters directly on entity (alias_field pattern)
     for (const [alias, fields] of Object.entries(this.fieldArrayCache)) {
-      entity[alias] = {};
-
       for (const [fieldName, array] of Object.entries(fields)) {
-        Object.defineProperty(entity[alias], fieldName, {
-          get: () => {
-            const eid = currentEidGetter();
-            return array[eid];
-          },
-          set: (value: any) => {
-            const eid = currentEidGetter();
-            array[eid] = value;
-          },
+        const flattenedName = `${alias}_${fieldName}`;
+
+        // Single property lookup: entity.transform_x instead of entity.transform.x
+        Object.defineProperty(entity, flattenedName, {
+          get() { return array[eidBox.value]; },
+          set(value: any) { array[eidBox.value] = value; },
           enumerable: true,
           configurable: false
         });
       }
-
-      // Seal the component proxy to prevent accidental property additions
-      Object.seal(entity[alias]);
     }
+
+    // Seal to lock shape for inline caching
+    Object.seal(entity);
 
     return entity;
   }

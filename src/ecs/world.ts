@@ -3,7 +3,7 @@ import { Component } from "./component";
 import { ComponentStore } from "./component-store";
 import { EntityHandle } from "./entity-handle";
 import { System } from "./system";
-import { SystemBuilder, ExecutableSystem } from "./system-builder";
+import { SystemBuilder, ExecutableSystem, BuildEntityProxy } from "./system-builder";
 
 /**
  * Storage backend type for component data
@@ -824,26 +824,60 @@ export class World {
    * - Runtime performance matches direct array access
    * - Full type safety with IntelliSense support
    *
-   * @returns SystemBuilder for chaining with(), fields(), and run()
+   * @param callback - Optional callback to set upfront
+   * @param options - Optional system configuration with components and fields
+   * @returns SystemBuilder for chaining, or ExecutableSystem if options provided
    *
    * @example
    * ```typescript
-   * world
-   *   .addSystem()
+   * // Fluent API (recommended):
+   * world.addSystem()
    *   .with(Transform2D, Velocity)
-   *   .fields([
-   *     { transform2d: ['x', 'y'] },
-   *     { velocity: ['vx', 'vy'] }
-   *   ])
+   *   .fields([{ transform2d: ['x', 'y'] }, { velocity: ['vx', 'vy'] }])
    *   .run((entity, deltaTime) => {
-   *     // entity.transform2d and entity.velocity are fully typed!
    *     entity.transform2d.x += entity.velocity.vx * deltaTime;
-   *     entity.transform2d.y += entity.velocity.vy * deltaTime;
    *   });
+   *
+   * // Compact API with full type safety:
+   * world.addSystem((entity, deltaTime) => {
+   *   entity.transform2d.x += entity.velocity.vx * deltaTime;
+   * }, {
+   *   with: [Transform2D, Velocity],
+   *   fields: [{ transform2d: ['x', 'y'] }, { velocity: ['vx', 'vy'] }]
+   * });
    * ```
    */
-  addSystem(): SystemBuilder<Component<any>[]> {
-    return new SystemBuilder(this, []) as any;
+  addSystem(): SystemBuilder<Component<any>[], undefined, boolean>;
+  addSystem<
+    const C extends readonly Component<any>[],
+    const FM extends readonly any[]
+  >(
+    callback: (entity: BuildEntityProxy<C, FM>, deltaTime: number, world: World) => void,
+    options: {
+      query: C;
+      fields: FM;
+    }
+  ): ExecutableSystem;
+  addSystem<
+    C extends Component<any>[] = Component<any>[],
+    FM extends {
+      [K in keyof C]: C[K] extends Component<infer T>
+        ? Record<string, readonly (keyof T)[]>
+        : never
+    } = any
+  >(
+    callback?: (entity: any, deltaTime: number, world: World) => void,
+    options?: {
+      query: C;
+      fields: FM;
+    }
+  ): any {
+    if (options && callback) {
+      // Compact API: build system immediately with typed callback
+      return new SystemBuilder(this, options.query, options.fields, callback).buildAndRegister();
+    }
+
+    return new SystemBuilder(this, [], undefined, callback) as any;
   }
 
   /**

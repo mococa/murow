@@ -8,12 +8,23 @@ echo "  ECS Benchmark Comparison (5 runs each)"
 echo "========================================="
 echo ""
 
-Run Murow benchmark 5 times
-echo "Running Murow ECS Benchmark (TypeScript/Bun) - 5 runs..."
+# Run Raw Murow benchmark 5 times
+
+echo "Running Raw Murow ECS Benchmark (TypeScript/Bun) - 5 runs..."
 echo "-----------------------------------------"
 for i in {1..5}; do
     echo "Murow run $i/5..."
     bun run ecs/murow/murow.ts 2>/dev/null
+done
+echo ""
+
+# Run Ergonomic Murow benchmark 5 times
+
+echo "Running Ergonomic Murow ECS Benchmark (TypeScript/Bun) - 5 runs..."
+echo "-----------------------------------------"
+for i in {1..5}; do
+    echo "Murow run $i/5..."
+    bun run ecs/murow/murow-ergonomic.ts 2>/dev/null
 done
 echo ""
 

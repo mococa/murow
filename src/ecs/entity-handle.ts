@@ -41,6 +41,19 @@ import { Entity, World } from "./world";
  * ```
  */
 export class EntityHandle {
+  // Reusable update batch - parallel arrays for better cache locality
+  private static batchArrays: any[] = [];
+  private static batchIndices: number[] = [];
+  private static batchValues: any[] = [];
+  private static batchLength = 0;
+
+  // Track prepared components to clear cache
+  private static preparedComponents: Component<any>[] = [];
+  private static preparedCount = 0;
+
+  // Instance batching state
+  private isBatching = false;
+
   /**
    * Creates an entity handle wrapping a world and entity ID.
    *
@@ -60,8 +73,16 @@ export class EntityHandle {
    */
   constructor(
     private readonly world: World,
-    private readonly _id: Entity
+    private _id: Entity
   ) {}
+
+  /**
+   * Internal method to reset the entity ID for handle reuse.
+   * @internal
+   */
+  _reset(id: Entity): void {
+    this._id = id;
+  }
 
   /**
    * Get component index with inline caching on the Component object.
@@ -79,6 +100,43 @@ export class EntityHandle {
       (component as any).__cachedIndex = index;
     }
     return index;
+  }
+
+  /**
+   * Get direct TypedArray access to a specific field.
+   * Cached on Component object for maximum performance.
+   *
+   * **Zero-cost abstraction** - Same speed as RAW API after first access.
+   *
+   * @param component - Component definition
+   * @param field - Field name
+   * @returns TypedArray with direct access to the field
+   *
+   * @example
+   * ```typescript
+   * const transformX = entity.field(Transform, 'x');
+   * const velocityVx = entity.field(Velocity, 'vx');
+   *
+   * // Direct array access - same as RAW API!
+   * transformX[entity.id] += velocityVx[entity.id] * dt;
+   * ```
+   */
+  field<T extends object, K extends keyof T>(
+    component: Component<T>,
+    field: K
+  ): Float32Array | Int32Array | Uint32Array | Uint16Array | Uint8Array {
+    // Cache key on component object
+    const cacheKey = `__fieldCache_${String(field)}`;
+    let array = (component as any)[cacheKey];
+
+    if (array === undefined) {
+      // First access: get store and cache array
+      const index = this.getComponentIndex(component);
+      array = this.world.componentStoresArray[index]!.getFieldArray(field);
+      (component as any)[cacheKey] = array;
+    }
+
+    return array;
   }
 
   /**
@@ -105,6 +163,8 @@ export class EntityHandle {
    * Get component data for this entity.
    * Returns a readonly reusable object (zero allocations).
    *
+   * In batch mode, returns cached data if available (from prepare() call).
+   *
    * @param component - Component to retrieve
    * @returns Readonly component data
    *
@@ -115,8 +175,63 @@ export class EntityHandle {
    * ```
    */
   get<T extends object>(component: Component<T>): Readonly<T> {
+    // In batch mode, check inline cache first
+    if (this.isBatching) {
+      const cached = (component as any).__batchCache;
+      if (cached !== undefined) {
+        return cached;
+      }
+    }
+
     const index = this.getComponentIndex(component);
     return this.world.componentStoresArray[index]!.get(this._id);
+  }
+
+  /**
+   * Pre-fetch and cache component data for batch mode.
+   * Use this before get() calls in beginUpdate() blocks for better performance.
+   *
+   * Only has effect in batch mode - does nothing when called outside beginUpdate().
+   *
+   * @param components - Components to pre-fetch
+   * @returns This handle for chaining
+   *
+   * @example
+   * ```typescript
+   * entity.beginUpdate().prepare(Transform, Velocity);
+   *
+   * const transform = entity.get(Transform);  // Uses cached data
+   * const velocity = entity.get(Velocity);    // Uses cached data
+   *
+   * entity
+   *   .setField(Transform, 'x', transform.x + velocity.vx * dt)
+   *   .setField(Transform, 'y', transform.y + velocity.vy * dt)
+   *   .flush();
+   * ```
+   */
+  prepare(...components: Component<any>[]): this {
+    if (this.isBatching) {
+      const prepared = EntityHandle.preparedComponents;
+      let count = EntityHandle.preparedCount;
+
+      for (let i = 0; i < components.length; i++) {
+        const component = components[i]!;
+        const index = this.getComponentIndex(component);
+        const data = this.world.componentStoresArray[index]!.get(this._id);
+        (component as any).__batchCache = data;
+
+        // Track for cleanup
+        if (count < prepared.length) {
+          prepared[count] = component;
+        } else {
+          prepared.push(component);
+        }
+        count++;
+      }
+
+      EntityHandle.preparedCount = count;
+    }
+    return this;
   }
 
   /**
@@ -144,6 +259,115 @@ export class EntityHandle {
     const index = this.getComponentIndex(component);
     this.world.componentStoresArray[index]!.update(this._id, data);
     return this;
+  }
+
+  /**
+   * Update fields using an updater function that mutates the component data directly.
+   * Zero allocations - the function mutates the mutable data object in place.
+   *
+   * @param component - Component to update
+   * @param updater - Function that receives mutable data and mutates it directly
+   * @returns This handle for chaining
+   *
+   * @example
+   * ```typescript
+   * // Mutate fields directly
+   * entity.setFields(Transform, function (t) {
+   *   t.x += velocity.vx * dt;
+   *   t.y += velocity.vy * dt;
+   * });
+   *
+   * // Conditional mutation
+   * entity.setFields(Health, function (h) {
+   *   if (h.current < h.max) {
+   *     h.current += 5;
+   *   }
+   * });
+   * ```
+   */
+  setFields<T extends object>(
+    component: Component<T>,
+    updater: (current: T) => void
+  ): this {
+    const index = this.getComponentIndex(component);
+    const store = this.world.componentStoresArray[index]!;
+    const mutable = store.getMutable(this._id);
+    updater(mutable);
+    store.set(this._id, mutable);
+    return this;
+  }
+
+  /**
+   * Set a single field directly without allocating an object.
+   * Zero-cost operation - same speed as RAW API.
+   *
+   * When batching is enabled (via beginUpdate()), this queues the update
+   * instead of applying it immediately. Call flush() to apply batched updates.
+   *
+   * @param component - Component to update
+   * @param field - Field name
+   * @param value - New value
+   * @returns This handle for chaining
+   *
+   * @example
+   * ```typescript
+   * // Immediate update
+   * entity.setField(Transform, 'x', 150);
+   *
+   * // Batched updates (reduced allocations, better JIT)
+   * entity.beginUpdate()
+   *   .setField(Transform, 'x', 150)
+   *   .setField(Transform, 'y', 200)
+   *   .setField(Health, 'current', 50)
+   *   .flush();
+   * ```
+   */
+  setField<T extends object, K extends keyof T>(
+    component: Component<T>,
+    field: K,
+    value: T[K]
+  ): this {
+    const index = this.getComponentIndex(component);
+    const store = this.world.componentStoresArray[index]!;
+    const array = store.getFieldArray(field);
+
+    if (this.isBatching) {
+      // Queue update for batching using parallel arrays
+      const len = EntityHandle.batchLength;
+      EntityHandle.batchArrays[len] = array;
+      EntityHandle.batchIndices[len] = this._id;
+      EntityHandle.batchValues[len] = value;
+      EntityHandle.batchLength++;
+    } else {
+      // Apply immediately
+      array[this._id] = value as any;
+    }
+
+    return this;
+  }
+
+  /**
+   * Get a single field value directly.
+   * More efficient than get() when you only need one field.
+   *
+   * @param component - Component to read from
+   * @param field - Field name
+   * @returns Field value
+   *
+   * @example
+   * ```typescript
+   * const x = entity.getField(Transform, 'x');
+   * const health = entity.getField(Health, 'current');
+   * ```
+   */
+  getField<T extends object, K extends keyof T>(
+    component: Component<T>,
+    field: K
+  ): T[K] {
+    const index = this.getComponentIndex(component);
+    const store = this.world.componentStoresArray[index]!;
+    const array = store.getFieldArray(field);
+    return array[this._id] as T[K];
   }
 
   /**
@@ -267,5 +491,73 @@ export class EntityHandle {
   getMutable<T extends object>(component: Component<T>): T {
     const index = this.getComponentIndex(component);
     return this.world.componentStoresArray[index]!.getMutable(this._id);
+  }
+
+  /**
+   * Begin batching updates for better performance.
+   * All setField() calls will be queued until flush() is called.
+   *
+   * **Benefits:**
+   * - Reduced allocations (reusable batch array)
+   * - Better JIT optimization (predictable pattern)
+   * - Reduced GC pressure
+   *
+   * @returns This handle for chaining
+   *
+   * @example
+   * ```typescript
+   * // Batch multiple field updates
+   * entity.beginUpdate()
+   *   .setField(Transform, 'x', 150)
+   *   .setField(Transform, 'y', 200)
+   *   .setField(Transform, 'rotation', 1.5)
+   *   .flush();
+   * ```
+   */
+  beginUpdate(): this {
+    this.isBatching = true;
+    EntityHandle.batchLength = 0;
+    return this;
+  }
+
+  /**
+   * Apply all batched updates.
+   * Resets batching mode - subsequent setField() calls apply immediately.
+   *
+   * @returns This handle for chaining
+   *
+   * @example
+   * ```typescript
+   * entity.beginUpdate()
+   *   .setField(Transform, 'x', 150)
+   *   .setField(Health, 'current', 50)
+   *   .flush(); // Applies both updates
+   * ```
+   */
+  flush(): this {
+    const arrays = EntityHandle.batchArrays;
+    const indices = EntityHandle.batchIndices;
+    const values = EntityHandle.batchValues;
+    const len = EntityHandle.batchLength;
+
+    // Apply all batched updates
+    for (let i = 0; i < len; i++) {
+      arrays[i][indices[i]] = values[i];
+    }
+
+    // Clear prepared component caches
+    const prepared = EntityHandle.preparedComponents;
+    const prepCount = EntityHandle.preparedCount;
+    for (let i = 0; i < prepCount; i++) {
+      const component = prepared[i]!;
+      (component as any).__batchCache = undefined;
+    }
+
+    // Reset batching state
+    this.isBatching = false;
+    EntityHandle.batchLength = 0;
+    EntityHandle.preparedCount = 0;
+
+    return this;
   }
 }

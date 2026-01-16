@@ -2,7 +2,7 @@ import { defineComponent } from "../../../src/ecs/component";
 import { BinaryCodec } from "../../../src/core/binary-codec";
 import { World } from "../../../src/ecs/world";
 
-// Define components
+// Define components matching Bevy's benchmark
 const Transform2D = defineComponent("Transform2D", {
   x: BinaryCodec.f32,
   y: BinaryCodec.f32,
@@ -14,7 +14,42 @@ const Velocity = defineComponent("Velocity", {
   vy: BinaryCodec.f32,
 });
 
-// Simple random number generator
+const Health = defineComponent("Health", {
+  current: BinaryCodec.u16,
+  max: BinaryCodec.u16,
+});
+
+const Armor = defineComponent("Armor", {
+  value: BinaryCodec.u16,
+});
+
+const Damage = defineComponent("Damage", {
+  amount: BinaryCodec.u16,
+});
+
+const Cooldown = defineComponent("Cooldown", {
+  current: BinaryCodec.f32,
+  max: BinaryCodec.f32,
+});
+
+const Team = defineComponent("Team", {
+  id: BinaryCodec.u8,
+});
+
+const Target = defineComponent("Target", {
+  entityId: BinaryCodec.u32,
+});
+
+const Status = defineComponent("Status", {
+  stunned: BinaryCodec.u8,
+  slowed: BinaryCodec.u8,
+});
+
+const Lifetime = defineComponent("Lifetime", {
+  remaining: BinaryCodec.f32,
+});
+
+// Simple random number generator for deterministic benchmarking
 class SimpleRng {
   private seed: number;
 
@@ -26,73 +61,195 @@ class SimpleRng {
     this.seed = (this.seed * 1103515245 + 12345) >>> 0;
     return (((this.seed / 65536) >>> 0) % 32768) / 32768.0;
   }
+
+  nextU16(): number {
+    return Math.floor(this.nextF32() * 65535);
+  }
+
+  nextU8(): number {
+    return Math.floor(this.nextF32() * 255);
+  }
 }
 
 function runBenchmark(entityCount: number): { avg: number; min: number; max: number } {
   const world = new World({
     maxEntities: entityCount,
-    components: [Transform2D, Velocity],
+    components: [
+      Transform2D,
+      Velocity,
+      Health,
+      Armor,
+      Damage,
+      Cooldown,
+      Team,
+      Target,
+      Status,
+      Lifetime,
+    ],
   });
 
-  // Register systems using addSystem API
-  world
-    .addSystem()
-    .with(Transform2D, Velocity)
-    .fields([
-      { transform2d: ['x', 'y'] },
+  // Cache arrays once for cross-entity reads
+  const healthCurrent = world.getFieldArray(Health, 'current');
+  const armorValue = world.getFieldArray(Armor, 'value');
+
+  // Register systems using ergonomic addSystem API
+  // These run automatically with world.runSystems()
+  world.addSystem((entity, deltaTime) => {
+    entity.transform_x += entity.velocity_vx * deltaTime;
+    entity.transform_y += entity.velocity_vy * deltaTime;
+  }, {
+    query: [Transform2D, Velocity],
+    fields: [
+      { transform: ['x', 'y'] },
       { velocity: ['vx', 'vy'] }
-    ])
-    .run((entity, deltaTime) => {
-      const transform = entity.transform2d;
-      const velocity = entity.velocity;
+    ]
+  });
 
-      transform.x += velocity.vx * deltaTime;
-      transform.y += velocity.vy * deltaTime;
-    });
-
-  world
-    .addSystem()
-    .with(Transform2D, Velocity)
-    .fields([
-      { transform2d: ['rotation'] },
+  world.addSystem((entity, _deltaTime) => {
+    const vx = entity.velocity_vx;
+    const vy = entity.velocity_vy;
+    if (vx !== 0 || vy !== 0) {
+      entity.transform_rotation = Math.atan2(vy, vx);
+    }
+  }, {
+    query: [Transform2D, Velocity],
+    fields: [
+      { transform: ['rotation'] },
       { velocity: ['vx', 'vy'] }
-    ])
-    .run((entity, _deltaTime) => {
-      const transform = entity.transform2d;
-      const velocity = entity.velocity;
+    ]
+  });
 
-      if (velocity.vx !== 0 || velocity.vy !== 0) {
-        transform.rotation = Math.atan2(velocity.vy, velocity.vx);
+  world.addSystem((entity, _deltaTime) => {
+    if (entity.transform_x < 0) entity.transform_x = 1000;
+    if (entity.transform_x > 1000) entity.transform_x = 0;
+    if (entity.transform_y < 0) entity.transform_y = 1000;
+    if (entity.transform_y > 1000) entity.transform_y = 0;
+  }, {
+    query: [Transform2D],
+    fields: [
+      { transform: ['x', 'y'] }
+    ]
+  });
+
+  world.addSystem((entity, deltaTime) => {
+    if (entity.cooldown_current > 0) {
+      const newCooldown = entity.cooldown_current - deltaTime;
+      entity.cooldown_current = newCooldown < 0 ? 0 : newCooldown;
+    }
+  }, {
+    query: [Cooldown],
+    fields: [
+      { cooldown: ['current'] }
+    ]
+  });
+
+  world.addSystem((entity, _deltaTime) => {
+    const stunned = entity.status_stunned;
+    const slowed = entity.status_slowed;
+
+    if (stunned === 1) {
+      entity.velocity_vx = 0;
+      entity.velocity_vy = 0;
+    } else if (slowed === 1) {
+      entity.velocity_vx *= 0.5;
+      entity.velocity_vy *= 0.5;
+    }
+  }, {
+    query: [Status, Velocity],
+    fields: [
+      { status: ['stunned', 'slowed'] },
+      { velocity: ['vx', 'vy'] }
+    ]
+  });
+
+  world.addSystem((entity, _deltaTime) => {
+    entity.velocity_vx *= 0.99;
+    entity.velocity_vy *= 0.99;
+  }, {
+    query: [Velocity],
+    fields: [
+      { velocity: ['vx', 'vy'] }
+    ]
+  });
+
+  // Create manual systems for conditional execution
+  const healthRegenSystem = world.addSystem((entity, _deltaTime) => {
+    const current = entity.health_current;
+    const max = entity.health_max;
+    if (current > 0 && current < max) {
+      const newHealth = current + 5;
+      entity.health_current = newHealth > max ? max : newHealth;
+    }
+  }, {
+    query: [Health],
+    fields: [
+      { health: ['current', 'max'] }
+    ]
+  });
+
+  const deathSystem = world.addSystem((entity, _deltaTime, world) => {
+    if (entity.health_current === 0) {
+      world.despawn(entity.eid);
+    }
+  }, {
+    query: [Health],
+    fields: [
+      { health: ['current'] }
+    ]
+  });
+
+  const lifetimeSystem = world.addSystem((entity, deltaTime, world) => {
+    const remaining = entity.lifetime_remaining - deltaTime;
+    if (remaining <= 0) {
+      world.despawn(entity.eid);
+    } else {
+      entity.lifetime_remaining = remaining;
+    }
+  }, {
+    query: [Lifetime],
+    fields: [
+      { lifetime: ['remaining'] }
+    ]
+  });
+
+  const aiSystem = world.addSystem((entity, _deltaTime) => {
+    entity.velocity_vx += (Math.random() - 0.5) * 2;
+    entity.velocity_vy += (Math.random() - 0.5) * 2;
+  }, {
+    query: [Velocity],
+    fields: [
+      { velocity: ['vx', 'vy'] }
+    ]
+  });
+
+  // Combat system - uses ergonomic API + closure over cached arrays for cross-entity reads
+  const combatSystem = world.addSystem((entity, _deltaTime, world) => {
+    if (entity.cooldown_current === 0 && world.isAlive(entity.target_entityId) && world.has(entity.target_entityId, Health)) {
+      const targetId = entity.target_entityId;
+      const targetHealth = healthCurrent[targetId]!;
+      let damageDealt = entity.damage_amount;
+
+      // Apply armor reduction
+      if (world.has(targetId, Armor)) {
+        const armor = armorValue[targetId]!;
+        const reduced = entity.damage_amount - armor * 0.1;
+        damageDealt = reduced < 1 ? 1 : Math.floor(reduced);
       }
-    });
 
-  world
-    .addSystem()
-    .with(Transform2D)
-    .fields([
-      { transform2d: ['x', 'y'] }
-    ])
-    .run((entity, _deltaTime) => {
-      const transform = entity.transform2d;
+      const newHealth = targetHealth > damageDealt ? targetHealth - damageDealt : 0;
+      healthCurrent[targetId] = newHealth;
 
-      if (transform.x < 0) transform.x = 1000;
-      if (transform.x > 1000) transform.x = 0;
-      if (transform.y < 0) transform.y = 1000;
-      if (transform.y > 1000) transform.y = 0;
-    });
-
-  world
-    .addSystem()
-    .with(Velocity)
-    .fields([
-      { velocity: ['vx', 'vy'] }
-    ])
-    .run((entity, _deltaTime) => {
-      const velocity = entity.velocity;
-
-      velocity.vx *= 0.99;
-      velocity.vy *= 0.99;
-    });
+      // Reset cooldown
+      entity.cooldown_current = entity.cooldown_max;
+    }
+  }, {
+    query: [Cooldown, Damage, Target],
+    fields: [
+      { cooldown: ['current', 'max'] },
+      { damage: ['amount'] },
+      { target: ['entityId'] }
+    ]
+  });
 
   // Setup entities
   const rng = new SimpleRng(12345);
@@ -110,6 +267,53 @@ function runBenchmark(entityCount: number): { avg: number; min: number; max: num
       vx: rng.nextF32() * 10 - 5,
       vy: rng.nextF32() * 10 - 5,
     });
+
+    world.add(entity, Health, {
+      current: 100,
+      max: 100,
+    });
+
+    // 80% have armor
+    if (rng.nextF32() > 0.2) {
+      world.add(entity, Armor, {
+        value: Math.floor(rng.nextF32() * 50),
+      });
+    }
+
+    // 60% can deal damage
+    if (rng.nextF32() > 0.4) {
+      const targetEntity = Math.floor(rng.nextF32() * entityCount);
+      world.add(entity, Damage, {
+        amount: Math.floor(rng.nextF32() * 20) + 10,
+      });
+      world.add(entity, Cooldown, {
+        current: 0,
+        max: 1.0,
+      });
+      world.add(entity, Target, {
+        entityId: targetEntity,
+      });
+    }
+
+    // Assign to teams
+    world.add(entity, Team, {
+      id: Math.floor(rng.nextF32() * 4),
+    });
+
+    // 20% have status effects
+    if (rng.nextF32() > 0.8) {
+      world.add(entity, Status, {
+        stunned: rng.nextF32() > 0.5 ? 1 : 0,
+        slowed: rng.nextF32() > 0.5 ? 1 : 0,
+      });
+    }
+
+    // 15% are temporary entities
+    if (rng.nextF32() > 0.85) {
+      world.add(entity, Lifetime, {
+        remaining: rng.nextF32() * 5,
+      });
+    }
   }
 
   // Run simulation for 60 frames
@@ -120,8 +324,33 @@ function runBenchmark(entityCount: number): { avg: number; min: number; max: num
   for (let frame = 0; frame < frameCount; frame++) {
     const frameStart = performance.now();
 
-    // Execute all systems
+    // Run all auto-registered systems
     world.runSystems(deltaTime);
+
+    // Health regen every 30 frames
+    if (frame % 30 === 0) {
+      healthRegenSystem.execute(deltaTime);
+    }
+
+    // Combat system every 5 frames
+    if (frame % 5 === 0) {
+      combatSystem.execute(deltaTime);
+    }
+
+    // Death system - despawn dead entities
+    deathSystem.execute(deltaTime);
+
+    // Lifetime system - despawn expired entities
+    lifetimeSystem.execute(deltaTime);
+
+    // AI behavior system every 20 frames
+    if (frame % 20 === 0) {
+      const rng = new SimpleRng(frame);
+      const originalRandom = Math.random;
+      Math.random = () => rng.nextF32();
+      aiSystem.execute(deltaTime);
+      Math.random = originalRandom;
+    }
 
     const frameTime = performance.now() - frameStart;
     frameTimes.push(frameTime);
@@ -135,7 +364,7 @@ function runBenchmark(entityCount: number): { avg: number; min: number; max: num
 }
 
 function main() {
-  console.log("Murow addSystem API Benchmark - 4 Systems\n");
+  console.log("Murow Ergonomic API Benchmark - Complex Game Simulation (11 Systems)\n");
   console.log("Running 5 iterations per entity count for averaging...\n");
 
   const entityCounts = [500, 1000, 5000, 10000, 25000, 50000];
