@@ -92,164 +92,176 @@ function runBenchmark(entityCount: number): { avg: number; min: number; max: num
   const healthCurrent = world.getFieldArray(Health, 'current');
   const armorValue = world.getFieldArray(Armor, 'value');
 
-  // Register systems using ergonomic addSystem API
+  // Register systems using ergonomic addSystem API with flattened property syntax
   // These run automatically with world.runSystems()
-  world.addSystem((entity, deltaTime) => {
-    entity.transform_x += entity.velocity_vx * deltaTime;
-    entity.transform_y += entity.velocity_vy * deltaTime;
-  }, {
-    query: [Transform2D, Velocity],
-    fields: [
+  // Note: We use flattened syntax (entity.transform_x) for best performance
+  world
+    .addSystem()
+    .query(Transform2D, Velocity)
+    .fields([
       { transform: ['x', 'y'] },
       { velocity: ['vx', 'vy'] }
-    ]
-  });
+    ])
+    .run((entity, deltaTime) => {
+      entity.transform_x += entity.velocity_vx * deltaTime;
+      entity.transform_y += entity.velocity_vy * deltaTime;
+    });
 
-  world.addSystem((entity, _deltaTime) => {
-    const vx = entity.velocity_vx;
-    const vy = entity.velocity_vy;
-    if (vx !== 0 || vy !== 0) {
-      entity.transform_rotation = Math.atan2(vy, vx);
-    }
-  }, {
-    query: [Transform2D, Velocity],
-    fields: [
+  world
+    .addSystem()
+    .query(Transform2D, Velocity)
+    .fields([
       { transform: ['rotation'] },
       { velocity: ['vx', 'vy'] }
-    ]
-  });
+    ])
+    .run((entity, _deltaTime) => {
+      const vx = entity.velocity_vx;
+      const vy = entity.velocity_vy;
+      if (vx !== 0 || vy !== 0) {
+        entity.transform_rotation = Math.atan2(vy, vx);
+      }
+    });
 
-  world.addSystem((entity, _deltaTime) => {
-    if (entity.transform_x < 0) entity.transform_x = 1000;
-    if (entity.transform_x > 1000) entity.transform_x = 0;
-    if (entity.transform_y < 0) entity.transform_y = 1000;
-    if (entity.transform_y > 1000) entity.transform_y = 0;
-  }, {
-    query: [Transform2D],
-    fields: [
+  world
+    .addSystem()
+    .query(Transform2D)
+    .fields([
       { transform: ['x', 'y'] }
-    ]
-  });
+    ])
+    .run((entity, _deltaTime) => {
+      if (entity.transform_x < 0) entity.transform_x = 1000;
+      if (entity.transform_x > 1000) entity.transform_x = 0;
+      if (entity.transform_y < 0) entity.transform_y = 1000;
+      if (entity.transform_y > 1000) entity.transform_y = 0;
+    });
 
-  world.addSystem((entity, deltaTime) => {
-    if (entity.cooldown_current > 0) {
-      const newCooldown = entity.cooldown_current - deltaTime;
-      entity.cooldown_current = newCooldown < 0 ? 0 : newCooldown;
-    }
-  }, {
-    query: [Cooldown],
-    fields: [
+  world
+    .addSystem()
+    .query(Cooldown)
+    .fields([
       { cooldown: ['current'] }
-    ]
-  });
+    ])
+    .run((entity, deltaTime) => {
+      if (entity.cooldown_current > 0) {
+        const newCooldown = entity.cooldown_current - deltaTime;
+        entity.cooldown_current = newCooldown < 0 ? 0 : newCooldown;
+      }
+    });
 
-  world.addSystem((entity, _deltaTime) => {
-    const stunned = entity.status_stunned;
-    const slowed = entity.status_slowed;
-
-    if (stunned === 1) {
-      entity.velocity_vx = 0;
-      entity.velocity_vy = 0;
-    } else if (slowed === 1) {
-      entity.velocity_vx *= 0.5;
-      entity.velocity_vy *= 0.5;
-    }
-  }, {
-    query: [Status, Velocity],
-    fields: [
+  world
+    .addSystem()
+    .query(Status, Velocity)
+    .fields([
       { status: ['stunned', 'slowed'] },
       { velocity: ['vx', 'vy'] }
-    ]
-  });
+    ])
+    .run((entity, _deltaTime) => {
+      const stunned = entity.status_stunned;
+      const slowed = entity.status_slowed;
 
-  world.addSystem((entity, _deltaTime) => {
-    entity.velocity_vx *= 0.99;
-    entity.velocity_vy *= 0.99;
-  }, {
-    query: [Velocity],
-    fields: [
+      if (stunned === 1) {
+        entity.velocity_vx = 0;
+        entity.velocity_vy = 0;
+      } else if (slowed === 1) {
+        entity.velocity_vx *= 0.5;
+        entity.velocity_vy *= 0.5;
+      }
+    });
+
+  world
+    .addSystem()
+    .query(Velocity)
+    .fields([
       { velocity: ['vx', 'vy'] }
-    ]
-  });
+    ])
+    .run((entity, _deltaTime) => {
+      entity.velocity_vx *= 0.99;
+      entity.velocity_vy *= 0.99;
+    });
 
   // Create manual systems for conditional execution
-  const healthRegenSystem = world.addSystem((entity, _deltaTime) => {
-    const current = entity.health_current;
-    const max = entity.health_max;
-    if (current > 0 && current < max) {
-      const newHealth = current + 5;
-      entity.health_current = newHealth > max ? max : newHealth;
-    }
-  }, {
-    query: [Health],
-    fields: [
+  const healthRegenSystem = world
+    .addSystem()
+    .query(Health)
+    .fields([
       { health: ['current', 'max'] }
-    ]
-  });
+    ])
+    .run((entity, _deltaTime) => {
+      const current = entity.health_current;
+      const max = entity.health_max;
+      if (current > 0 && current < max) {
+        const newHealth = current + 5;
+        entity.health_current = newHealth > max ? max : newHealth;
+      }
+    });
 
-  const deathSystem = world.addSystem((entity, _deltaTime, world) => {
-    if (entity.health_current === 0) {
-      world.despawn(entity.eid);
-    }
-  }, {
-    query: [Health],
-    fields: [
+  const deathSystem = world
+    .addSystem()
+    .query(Health)
+    .fields([
       { health: ['current'] }
-    ]
-  });
+    ])
+    .run((entity, _deltaTime, world) => {
+      if (entity.health_current === 0) {
+        world.despawn(entity.eid);
+      }
+    });
 
-  const lifetimeSystem = world.addSystem((entity, deltaTime, world) => {
-    const remaining = entity.lifetime_remaining - deltaTime;
-    if (remaining <= 0) {
-      world.despawn(entity.eid);
-    } else {
-      entity.lifetime_remaining = remaining;
-    }
-  }, {
-    query: [Lifetime],
-    fields: [
+  const lifetimeSystem = world
+    .addSystem()
+    .query(Lifetime)
+    .fields([
       { lifetime: ['remaining'] }
-    ]
-  });
+    ])
+    .run((entity, deltaTime, world) => {
+      const remaining = entity.lifetime_remaining - deltaTime;
+      if (remaining <= 0) {
+        world.despawn(entity.eid);
+      } else {
+        entity.lifetime_remaining = remaining;
+      }
+    });
 
-  const aiSystem = world.addSystem((entity, _deltaTime) => {
-    entity.velocity_vx += (Math.random() - 0.5) * 2;
-    entity.velocity_vy += (Math.random() - 0.5) * 2;
-  }, {
-    query: [Velocity],
-    fields: [
+  const aiSystem = world
+    .addSystem()
+    .query(Velocity)
+    .fields([
       { velocity: ['vx', 'vy'] }
-    ]
-  });
+    ])
+    .run((entity, _deltaTime) => {
+      entity.velocity_vx += (Math.random() - 0.5) * 2;
+      entity.velocity_vy += (Math.random() - 0.5) * 2;
+    });
 
   // Combat system - uses ergonomic API + closure over cached arrays for cross-entity reads
-  const combatSystem = world.addSystem((entity, _deltaTime, world) => {
-    if (entity.cooldown_current === 0 && world.isAlive(entity.target_entityId) && world.has(entity.target_entityId, Health)) {
-      const targetId = entity.target_entityId;
-      const targetHealth = healthCurrent[targetId]!;
-      let damageDealt = entity.damage_amount;
-
-      // Apply armor reduction
-      if (world.has(targetId, Armor)) {
-        const armor = armorValue[targetId]!;
-        const reduced = entity.damage_amount - armor * 0.1;
-        damageDealt = reduced < 1 ? 1 : Math.floor(reduced);
-      }
-
-      const newHealth = targetHealth > damageDealt ? targetHealth - damageDealt : 0;
-      healthCurrent[targetId] = newHealth;
-
-      // Reset cooldown
-      entity.cooldown_current = entity.cooldown_max;
-    }
-  }, {
-    query: [Cooldown, Damage, Target],
-    fields: [
+  const combatSystem = world
+    .addSystem()
+    .query(Cooldown, Damage, Target)
+    .fields([
       { cooldown: ['current', 'max'] },
       { damage: ['amount'] },
       { target: ['entityId'] }
-    ]
-  });
+    ])
+    .run((entity, _deltaTime, world) => {
+      if (entity.cooldown_current === 0 && world.isAlive(entity.target_entityId) && world.has(entity.target_entityId, Health)) {
+        const targetId = entity.target_entityId;
+        const targetHealth = healthCurrent[targetId]!;
+        let damageDealt = entity.damage_amount;
+
+        // Apply armor reduction
+        if (world.has(targetId, Armor)) {
+          const armor = armorValue[targetId]!;
+          const reduced = entity.damage_amount - armor * 0.1;
+          damageDealt = reduced < 1 ? 1 : Math.floor(reduced);
+        }
+
+        const newHealth = targetHealth > damageDealt ? targetHealth - damageDealt : 0;
+        healthCurrent[targetId] = newHealth;
+
+        // Reset cooldown
+        entity.cooldown_current = entity.cooldown_max;
+      }
+    });
 
   // Setup entities
   const rng = new SimpleRng(12345);
@@ -367,7 +379,7 @@ function main() {
   console.log("Murow Ergonomic API Benchmark - Complex Game Simulation (11 Systems)\n");
   console.log("Running 5 iterations per entity count for averaging...\n");
 
-  const entityCounts = [500, 1000, 5000, 10000, 25000, 50000];
+  const entityCounts = [500, 1_000, 5_000, 10_000, 15_000, 25_000, 50_000, 100_000];
 
   console.log("| Entity Count | Avg Time | FPS | Min | Max |");
   console.log("|--------------|----------|-----|-----|-----|");

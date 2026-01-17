@@ -18,6 +18,16 @@ for i in {1..5}; do
 done
 echo ""
 
+# Run Hybrid Murow benchmark 5 times
+
+echo "Running Hybrid Murow ECS Benchmark (TypeScript/Bun) - 5 runs..."
+echo "-----------------------------------------"
+for i in {1..5}; do
+    echo "Murow run $i/5..."
+    bun run ecs/murow/murow-hybrid.ts 2>/dev/null
+done
+echo ""
+
 # Run Ergonomic Murow benchmark 5 times
 
 echo "Running Ergonomic Murow ECS Benchmark (TypeScript/Bun) - 5 runs..."

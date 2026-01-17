@@ -88,7 +88,7 @@ function runBenchmark(entityCount: number): { avg: number; min: number; max: num
     ],
   });
 
-  // Get direct array access (bitECS-style - wanna get raw lets get raw then)
+  // Get direct array access (bitECS-style)
   const transformX = world.getFieldArray(Transform2D, 'x');
   const transformY = world.getFieldArray(Transform2D, 'y');
   const transformRot = world.getFieldArray(Transform2D, 'rotation');
@@ -191,6 +191,7 @@ function runBenchmark(entityCount: number): { avg: number; min: number; max: num
       const eid = movementEntities[i]!;
       const vx = velocityVx[eid]!;
       const vy = velocityVy[eid]!;
+
       if (vx !== 0 || vy !== 0) {
         transformRot[eid] = Math.atan2(vy, vx);
       }
@@ -200,19 +201,21 @@ function runBenchmark(entityCount: number): { avg: number; min: number; max: num
     const boundaryEntities = world.query(Transform2D);
     for (let i = 0; i < boundaryEntities.length; i++) {
       const eid = boundaryEntities[i]!;
-      if (transformX[eid]! < 0) transformX[eid] = 1000;
-      if (transformX[eid]! > 1000) transformX[eid] = 0;
-      if (transformY[eid]! < 0) transformY[eid] = 1000;
-      if (transformY[eid]! > 1000) transformY[eid] = 0;
+      if (transformX[eid]! < 0) transformX[eid]! = 1000;
+      if (transformX[eid]! > 1000) transformX[eid]! = 0;
+      if (transformY[eid]! < 0) transformY[eid]! = 1000;
+      if (transformY[eid]! > 1000) transformY[eid]! = 0;
     }
 
     // Health regen system
     if (frame % 30 === 0) {
       const healthEntities = world.query(Health);
+
       for (let i = 0; i < healthEntities.length; i++) {
         const eid = healthEntities[i]!;
         const current = healthCurrent[eid]!;
         const max = healthMax[eid]!;
+
         if (current > 0 && current < max) {
           const newHealth = current + 5;
           healthCurrent[eid] = newHealth > max ? max : newHealth;
@@ -224,6 +227,7 @@ function runBenchmark(entityCount: number): { avg: number; min: number; max: num
     const cooldownEntities = world.query(Cooldown);
     for (let i = 0; i < cooldownEntities.length; i++) {
       const eid = cooldownEntities[i]!;
+
       if (cooldownCurrent[eid]! > 0) {
         const newCooldown = cooldownCurrent[eid]! - deltaTime;
         cooldownCurrent[eid] = newCooldown < 0 ? 0 : newCooldown;
@@ -260,8 +264,9 @@ function runBenchmark(entityCount: number): { avg: number; min: number; max: num
       // Apply all updates
       for (const { targetId, newHealth, attackerId } of updates) {
         if (world.isAlive(targetId)) {
-          healthCurrent[targetId]! = newHealth!;
+          healthCurrent[targetId] = newHealth;
         }
+
         // Reset cooldown
         cooldownCurrent[attackerId] = cooldownMax[attackerId]!;
       }
@@ -272,6 +277,7 @@ function runBenchmark(entityCount: number): { avg: number; min: number; max: num
     const toRemove: number[] = [];
     for (let i = 0; i < deathEntities.length; i++) {
       const eid = deathEntities[i]!;
+
       if (healthCurrent[eid] === 0) {
         toRemove.push(eid);
       }
@@ -284,8 +290,8 @@ function runBenchmark(entityCount: number): { avg: number; min: number; max: num
     const statusEntities = world.query(Status, Velocity);
     for (let i = 0; i < statusEntities.length; i++) {
       const eid = statusEntities[i]!;
-      const stunned = statusStunned[eid]!;
-      const slowed = statusSlowed[eid]!;
+      const stunned = statusStunned[eid];
+      const slowed = statusSlowed[eid];
 
       if (stunned === 1) {
         velocityVx[eid] = 0;
@@ -309,6 +315,7 @@ function runBenchmark(entityCount: number): { avg: number; min: number; max: num
         lifetimeRemaining[eid] = remaining;
       }
     }
+
     for (const eid of expiredEntities) {
       world.despawn(eid);
     }
@@ -317,6 +324,7 @@ function runBenchmark(entityCount: number): { avg: number; min: number; max: num
     const velocityEntities = world.query(Velocity);
     for (let i = 0; i < velocityEntities.length; i++) {
       const eid = velocityEntities[i]!;
+
       velocityVx[eid]! *= 0.99;
       velocityVy[eid]! *= 0.99;
     }
@@ -326,6 +334,7 @@ function runBenchmark(entityCount: number): { avg: number; min: number; max: num
       const rng = new SimpleRng(frame);
       for (let i = 0; i < velocityEntities.length; i++) {
         const eid = velocityEntities[i]!;
+
         if (rng.nextF32() > 0.9) {
           velocityVx[eid]! += (rng.nextF32() - 0.5) * 2;
           velocityVy[eid]! += (rng.nextF32() - 0.5) * 2;
@@ -348,7 +357,7 @@ function main() {
   console.log("Murow RAW API Benchmark - Complex Game Simulation (11 Systems)\n");
   console.log("Running 5 iterations per entity count for averaging...\n");
 
-  const entityCounts = [500, 1000, 5000, 10000, 25000, 50000];
+  const entityCounts = [500, 1_000, 5_000, 10_000, 15_000, 25_000, 50_000, 100_000];
 
   console.log("| Entity Count | Avg Time | FPS | Min | Max |");
   console.log("|--------------|----------|-----|-----|-----|");
