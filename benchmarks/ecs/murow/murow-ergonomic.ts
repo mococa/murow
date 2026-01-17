@@ -267,27 +267,25 @@ function runBenchmark(entityCount: number): { avg: number; min: number; max: num
   const rng = new SimpleRng(12345);
 
   for (let i = 0; i < entityCount; i++) {
-    const entity = world.spawn();
-
-    world.add(entity, Transform2D, {
-      x: rng.nextF32() * 1000,
-      y: rng.nextF32() * 1000,
-      rotation: rng.nextF32() * Math.PI * 2,
-    });
-
-    world.add(entity, Velocity, {
-      vx: rng.nextF32() * 10 - 5,
-      vy: rng.nextF32() * 10 - 5,
-    });
-
-    world.add(entity, Health, {
-      current: 100,
-      max: 100,
-    });
+    const entity = world
+      .entity(world.spawn())
+      .add(Transform2D, {
+        x: rng.nextF32() * 1000,
+        y: rng.nextF32() * 1000,
+        rotation: rng.nextF32() * Math.PI * 2,
+      })
+      .add(Velocity, {
+        vx: rng.nextF32() * 10 - 5,
+        vy: rng.nextF32() * 10 - 5,
+      })
+      .add(Health, {
+        current: 100,
+        max: 100,
+      });
 
     // 80% have armor
     if (rng.nextF32() > 0.2) {
-      world.add(entity, Armor, {
+      entity.add(Armor, {
         value: Math.floor(rng.nextF32() * 50),
       });
     }
@@ -295,26 +293,23 @@ function runBenchmark(entityCount: number): { avg: number; min: number; max: num
     // 60% can deal damage
     if (rng.nextF32() > 0.4) {
       const targetEntity = Math.floor(rng.nextF32() * entityCount);
-      world.add(entity, Damage, {
-        amount: Math.floor(rng.nextF32() * 20) + 10,
-      });
-      world.add(entity, Cooldown, {
-        current: 0,
-        max: 1.0,
-      });
-      world.add(entity, Target, {
-        entityId: targetEntity,
-      });
+      entity
+        .add(Damage, {
+          amount: Math.floor(rng.nextF32() * 20) + 10,
+        })
+        .add(Cooldown, {
+          current: 0,
+          max: 1.0,
+        })
+        .add(Target, { entityId: targetEntity });
     }
 
     // Assign to teams
-    world.add(entity, Team, {
-      id: Math.floor(rng.nextF32() * 4),
-    });
+    entity.add(Team, { id: Math.floor(rng.nextF32() * 4) });
 
     // 20% have status effects
     if (rng.nextF32() > 0.8) {
-      world.add(entity, Status, {
+      entity.add(Status, {
         stunned: rng.nextF32() > 0.5 ? 1 : 0,
         slowed: rng.nextF32() > 0.5 ? 1 : 0,
       });
@@ -322,7 +317,7 @@ function runBenchmark(entityCount: number): { avg: number; min: number; max: num
 
     // 15% are temporary entities
     if (rng.nextF32() > 0.85) {
-      world.add(entity, Lifetime, {
+      entity.add(Lifetime, {
         remaining: rng.nextF32() * 5,
       });
     }
