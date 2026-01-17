@@ -96,7 +96,7 @@ export class EntityHandle {
     let index = (component as any).__cachedIndex;
     if (index === undefined) {
       // First access: lookup and cache
-      index = this.world.componentMap.get(component)!;
+      index = this.world.componentMap[component.name];
       (component as any).__cachedIndex = index;
     }
     return index;

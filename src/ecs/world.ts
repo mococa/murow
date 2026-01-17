@@ -70,14 +70,14 @@ export class World extends WorldSystems {
   private aliveEntityFlags: Uint8Array; // 1 byte per entity for alive check
 
   // Component system (array-indexed for O(1) access)
-  private componentStoresArray: (ComponentStore<any> | undefined)[];
+  public componentStoresArray: (ComponentStore<any> | undefined)[];
   private componentMasks: Uint32Array[]; // Dynamic array of bitmask words (32 components per word)
   private componentMasks0!: Uint32Array; // Fast path: cached reference to first word (most common case)
   private numMaskWords: number = 0; // Number of allocated mask words
 
   // Component registry (Map only for initial lookup)
   /** @internal - Exposed for EntityHandle performance optimization */
-  public componentMap: Map<Component<any>, number> = new Map();
+  readonly componentMap: Record<string, number> = {};
   private components: Component<any>[] = [];
 
   // Query result cache (reusable buffers for zero allocations)
@@ -128,7 +128,7 @@ export class World extends WorldSystems {
     // Register components
     config.components.forEach((component, index) => {
       this.components.push(component);
-      this.componentMap.set(component, index);
+      this.componentMap[component.name] = index;
 
       // Create component store with selected backend
       const store = new ComponentStore(component, this.maxEntities);
@@ -140,7 +140,7 @@ export class World extends WorldSystems {
    * Get component index (with caching via Map)
    */
   private getComponentIndex(component: Component<any>): number {
-    const index = this.componentMap.get(component);
+    const index = this.componentMap[component.name];
     if (index === undefined) {
       const registered = this.components.map((c) => c.name).join(", ");
       throw new Error(
@@ -252,7 +252,7 @@ export class World extends WorldSystems {
     const indices: number[] = [];
 
     for (const component of components) {
-      const index = this.componentMap.get(component);
+      const index = this.componentMap[component.name];
       if (index === undefined) return null; // Invalid mask sentinel
       indices.push(index);
       if (index > maxIndex) maxIndex = index;
@@ -476,7 +476,7 @@ export class World extends WorldSystems {
    * Remove a component from an entity.
    */
   remove<T extends object>(entity: Entity, component: Component<T>): void {
-    const index = this.componentMap.get(component);
+    const index = this.componentMap[component.name];
     if (index === undefined) return;
 
     this.clearComponentBit(entity, index);
@@ -494,7 +494,7 @@ export class World extends WorldSystems {
    * Check if an entity has a component.
    */
   has<T extends object>(entity: Entity, component: Component<T>): boolean {
-    const index = this.componentMap.get(component);
+    const index = this.componentMap[component.name];
     if (index === undefined) return false;
 
     return this.hasComponentBit(entity, index);
@@ -716,7 +716,7 @@ export class World extends WorldSystems {
     const componentArrays: any[] = [];
 
     for (const component of components) {
-      const index = this.componentMap.get(component);
+      const index = this.componentMap[component.name];
       if (index === undefined) continue;
 
       const store = this.componentStoresArray[index];
