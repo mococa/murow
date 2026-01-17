@@ -2,13 +2,7 @@ import { generateId } from "../core/generate-id";
 import { Component } from "./component";
 import { ComponentStore } from "./component-store";
 import { EntityHandle } from "./entity-handle";
-import { System } from "./system";
-import { SystemBuilder, ExecutableSystem, BuildEntityProxy } from "./system-builder";
-
-/**
- * Storage backend type for component data
- */
-export type StorageBackend = "dataview" | "typedarrays";
+import { WorldSystems } from "./world-systems";
 
 /**
  * Configuration for creating a World
@@ -59,7 +53,7 @@ export type Entity = number;
  * }
  * ```
  */
-export class World {
+export class World extends WorldSystems {
   private maxEntities: number;
   private nextEntityId: number = 0;
 
@@ -76,16 +70,14 @@ export class World {
   private aliveEntityFlags: Uint8Array; // 1 byte per entity for alive check
 
   // Component system (array-indexed for O(1) access)
-  /** @internal - Exposed for EntityHandle performance optimization */
-  public readonly componentStoresArray: (ComponentStore<any> | undefined)[];
+  private componentStoresArray: (ComponentStore<any> | undefined)[];
   private componentMasks: Uint32Array[]; // Dynamic array of bitmask words (32 components per word)
   private componentMasks0!: Uint32Array; // Fast path: cached reference to first word (most common case)
   private numMaskWords: number = 0; // Number of allocated mask words
-  private storageBackend: StorageBackend;
 
   // Component registry (Map only for initial lookup)
   /** @internal - Exposed for EntityHandle performance optimization */
-  public readonly componentMap: Map<Component<any>, number> = new Map();
+  public componentMap: Map<Component<any>, number> = new Map();
   private components: Component<any>[] = [];
 
   // Query result cache (reusable buffers for zero allocations)
@@ -98,16 +90,11 @@ export class World {
   // Query mask cache (avoid recomputing masks for same component combinations)
   private queryMaskCache: Record<string, number[]> = {};
 
-  // Reusable EntityHandle for zero allocations
-  private reusableHandle?: EntityHandle;
-
-  // Systems registered with addSystem()
-  private systems: ExecutableSystem[] = [];
-
   // Debug ID
   private worldId = generateId({ prefix: "world_" });
 
   constructor(config: WorldConfig) {
+    super();
     this.maxEntities = config.maxEntities ?? 10000;
 
     // Calculate number of mask words needed (1 word per 32 components)
@@ -299,6 +286,74 @@ export class World {
       }
     }
     return key;
+  }
+
+  /**
+   * Internal: Get query mask key for a set of components.
+   * Used by SystemBuilder for precomputing query keys.
+   * @internal
+   */
+  private _getQueryMaskKey(components: Component<any>[]): string {
+    const mask = this.getQueryMask(components);
+    return mask ? this.maskToKey(mask) : '';
+  }
+
+  /**
+   * Internal: Query entities by precomputed mask key and mask.
+   * Used by ExecutableSystem for fast queries without mask recomputation.
+   * @internal
+   */
+  private _queryByMaskKey(maskKey: string, requiredMask: number[]): readonly Entity[] {
+    // Get or create reusable buffer for this query mask
+    let buffer = this.queryResultBuffers[maskKey];
+    if (!buffer) {
+      buffer = [];
+      this.queryResultBuffers[maskKey] = buffer;
+    }
+
+    // Check if cache is valid (persistent query caching)
+    if (this.queryCacheVersions[maskKey] === this.archetypeVersion) {
+      // Cache is valid! Return cached result (FAST PATH - no iteration!)
+      return buffer;
+    }
+
+    // Cache is stale - rebuild by iterating alive entities
+    const aliveEntities = this.aliveEntitiesArray;
+    const length = aliveEntities.length;
+    const numWords = requiredMask.length;
+    let writeIdx = 0;
+
+    // Fast path for single-word masks (most common case, <32 components)
+    if (numWords === 1) {
+      const mask0 = requiredMask[0];
+      const componentMasks0 = this.componentMasks0;
+      for (let i = 0; i < length; i++) {
+        const entity = aliveEntities[i]!;
+        if ((componentMasks0[entity] & mask0) === mask0) {
+          buffer[writeIdx++] = entity;
+        }
+      }
+    } else {
+      // Multi-word mask path
+      const componentMasks = this.componentMasks;
+      outer: for (let i = 0; i < length; i++) {
+        const entity = aliveEntities[i]!;
+        for (let w = 0; w < numWords; w++) {
+          if ((componentMasks[w][entity] & requiredMask[w]) !== requiredMask[w]) {
+            continue outer;
+          }
+        }
+        buffer[writeIdx++] = entity;
+      }
+    }
+
+    // Truncate buffer to actual size (zero allocations)
+    buffer.length = writeIdx;
+
+    // Mark cache as valid for this archetype version
+    this.queryCacheVersions[maskKey] = this.archetypeVersion;
+
+    return buffer;
   }
 
   /**
@@ -739,18 +794,8 @@ export class World {
     component: Component<T>,
     fieldName: keyof T
   ): Float32Array | Int32Array | Uint32Array | Uint16Array | Uint8Array {
-    // Cache array on component object for zero-cost repeated access
-    const cacheKey = `__fieldCache_${String(fieldName)}`;
-    let array = (component as any)[cacheKey];
-
-    if (array === undefined) {
-      // First access: get store and cache array
-      const index = this.getComponentIndex(component);
-      array = this.componentStoresArray[index]!.getFieldArray(fieldName);
-      (component as any)[cacheKey] = array;
-    }
-
-    return array;
+    const index = this.getComponentIndex(component);
+    return this.componentStoresArray[index]!.getFieldArray(fieldName);
   }
 
   /**
@@ -779,135 +824,6 @@ export class World {
    * ```
    */
   entity(entityId: Entity): EntityHandle {
-    if (!this.reusableHandle) {
-      this.reusableHandle = new EntityHandle(this, entityId);
-    } else {
-      this.reusableHandle._reset(entityId);
-    }
-    return this.reusableHandle;
-  }
-
-  /**
-   * Create a System helper with automatic field array caching.
-   *
-   * Combines the ergonomics of EntityHandle with the performance of RAW API.
-   * Field arrays are cached on first access for zero-cost abstraction.
-   *
-   * @param components - Components this system operates on
-   * @returns System instance with cached field arrays
-   *
-   * @example
-   * ```typescript
-   * // Create system once at initialization
-   * const movement = world.system(Transform, Velocity);
-   *
-   * // Access field arrays - cached on first access
-   * const { Transform_x: tx, Transform_y: ty, Velocity_vx: vx, Velocity_vy: vy } = movement.fields;
-   *
-   * // In game loop - direct array access (RAW API performance)
-   * for (const eid of movement.query()) {
-   *   tx[eid] += vx[eid] * dt;
-   *   ty[eid] += vy[eid] * dt;
-   * }
-   * ```
-   */
-  system<C extends Component<any>[]>(...components: C): System<C> {
-    return new System(this, components);
-  }
-
-  /**
-   * Create a system with ergonomic proxy-based field access.
-   *
-   * Provides a fluent API that compiles down to RAW API performance:
-   * - User writes ergonomic code with entity.component.field syntax
-   * - System automatically caches TypedArrays and creates proxies
-   * - Runtime performance matches direct array access
-   * - Full type safety with IntelliSense support
-   *
-   * @param callback - Optional callback to set upfront
-   * @param options - Optional system configuration with components and fields
-   * @returns SystemBuilder for chaining, or ExecutableSystem if options provided
-   *
-   * @example
-   * ```typescript
-   * // Fluent API (recommended):
-   * world.addSystem()
-   *   .with(Transform2D, Velocity)
-   *   .fields([{ transform2d: ['x', 'y'] }, { velocity: ['vx', 'vy'] }])
-   *   .run((entity, deltaTime) => {
-   *     entity.transform2d.x += entity.velocity.vx * deltaTime;
-   *   });
-   *
-   * // Compact API with full type safety:
-   * world.addSystem((entity, deltaTime) => {
-   *   entity.transform2d.x += entity.velocity.vx * deltaTime;
-   * }, {
-   *   with: [Transform2D, Velocity],
-   *   fields: [{ transform2d: ['x', 'y'] }, { velocity: ['vx', 'vy'] }]
-   * });
-   * ```
-   */
-  addSystem(): SystemBuilder<Component<any>[], undefined, boolean>;
-  addSystem<
-    const C extends readonly Component<any>[],
-    const FM extends readonly any[]
-  >(
-    callback: (entity: BuildEntityProxy<C, FM>, deltaTime: number, world: World) => void,
-    options: {
-      query: C;
-      fields: FM;
-    }
-  ): ExecutableSystem;
-  addSystem<
-    C extends Component<any>[] = Component<any>[],
-    FM extends {
-      [K in keyof C]: C[K] extends Component<infer T>
-        ? Record<string, readonly (keyof T)[]>
-        : never
-    } = any
-  >(
-    callback?: (entity: any, deltaTime: number, world: World) => void,
-    options?: {
-      query: C;
-      fields: FM;
-    }
-  ): any {
-    if (options && callback) {
-      // Compact API: build system immediately with typed callback
-      return new SystemBuilder(this, options.query, options.fields, callback).buildAndRegister();
-    }
-
-    return new SystemBuilder(this, [], undefined, callback) as any;
-  }
-
-  /**
-   * Internal method to register an executable system.
-   * Called by SystemBuilder after fields() is invoked.
-   *
-   * @internal
-   */
-  _registerSystem(system: ExecutableSystem): void {
-    this.systems.push(system);
-  }
-
-  /**
-   * Execute all registered systems.
-   *
-   * Call this in your game loop to run all systems registered via addSystem().
-   *
-   * @param deltaTime - Time delta since last frame
-   *
-   * @example
-   * ```typescript
-   * // Game loop
-   * function gameLoop(deltaTime: number) {
-   *   world.runSystems(deltaTime);
-   * }
-   * ```
-   */
-  runSystems(deltaTime: number): void {
-    for (let i = 0; i < this.systems.length; i++) {
-      this.systems[i]!.execute(deltaTime);
-    }
+    return new EntityHandle(this, entityId);
   }
 }
