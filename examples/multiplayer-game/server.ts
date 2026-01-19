@@ -157,7 +157,7 @@ class GameServer {
         this.startHttpServer();
 
         // Game loop using server driver
-        const driver = createDriver('server', (dt: number) => {
+        const driver = createDriver('server-timeout', (dt: number) => {
             this.simulation.update(dt);
         });
 
