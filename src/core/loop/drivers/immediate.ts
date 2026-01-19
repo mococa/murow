@@ -30,6 +30,7 @@ export class ImmediateDriver implements LoopDriver {
 
     /**
      * Starts the game loop using setImmediate.
+     * 
      * Resets timing to prevent large initial delta.
      */
     start() {
@@ -40,6 +41,7 @@ export class ImmediateDriver implements LoopDriver {
 
     /**
      * Stops the game loop.
+     * 
      * Note: Does not cancel already queued setImmediate callbacks.
      */
     stop() {
@@ -48,6 +50,7 @@ export class ImmediateDriver implements LoopDriver {
 
     /**
      * Internal loop method that calculates delta time and schedules the next iteration.
+     * 
      * Delta time is provided in seconds.
      */
     loop = () => {

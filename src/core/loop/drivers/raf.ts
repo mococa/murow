@@ -29,6 +29,7 @@ export class RafDriver implements LoopDriver {
 
     /**
      * Starts the game loop using requestAnimationFrame.
+     * 
      * Resets timing to prevent large initial delta.
      */
     start() {
@@ -50,6 +51,7 @@ export class RafDriver implements LoopDriver {
 
     /**
      * Internal loop method that calculates delta time and schedules the next frame.
+     * 
      * Delta time is provided in seconds.
      */
     loop = () => {
