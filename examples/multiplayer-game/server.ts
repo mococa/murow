@@ -1,5 +1,6 @@
 import { ServerNetwork } from "../../src/net/server";
 import { BunWebSocketServerTransport } from "../../src/net/adapters/bun-websocket";
+import { createDriver } from "../../src/core/loop";
 import {
     Simulation,
     createIntentRegistry,
@@ -155,14 +156,12 @@ class GameServer {
         // Start HTTP server to serve the client
         this.startHttpServer();
 
-        // Game loop - simulation.update() will trigger onTick callback
-        let last = performance.now();
-        setInterval(() => {
-            const now = performance.now();
-            const dt = (now - last) / 1000;
-            last = now;
+        // Game loop using server driver
+        const driver = createDriver('server', (dt: number) => {
             this.simulation.update(dt);
-        }, 1000 / this.simulation.ticker.rate);
+        });
+
+        driver.start();
     }
 
     startHttpServer() {

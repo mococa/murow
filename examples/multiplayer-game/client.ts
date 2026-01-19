@@ -3,6 +3,7 @@ import {
     generateId,
     lerp,
     Reconciliator,
+    createDriver,
 } from "../../src";
 
 import { BrowserWebSocketClientTransport } from "../../src/net/adapters/browser-websocket";
@@ -222,19 +223,12 @@ export class GameClient {
     ================================ */
 
     start() {
-        let last = performance.now();
-
-        const loop = (now: number) => {
-            const dt = (now - last) / 1000;
-            last = now;
-
+        const driver = createDriver('client', (dt: number) => {
             this.simulation.update(dt);
             this.render();
+        });
 
-            requestAnimationFrame(loop);
-        };
-
-        requestAnimationFrame(loop);
+        driver.start();
     }
 
     tick(tick: number) {
