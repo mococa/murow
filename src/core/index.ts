@@ -3,6 +3,7 @@ export * from './events';
 export * from './fixed-ticker';
 export * from './generate-id';
 export * from './lerp';
+export * from './loop';
 export * from './navmesh';
 export * from './pooled-codec';
 export * from './prediction';
