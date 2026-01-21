@@ -1,4 +1,4 @@
-import { LoopDriver } from "../loop";
+import { LoopDriver } from "../driver";
 
 /**
  * Client-side game loop driver using requestAnimationFrame.

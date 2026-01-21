@@ -1,4 +1,4 @@
-# Loop
+# Driver
 
 Environment-aware game loop drivers for client (browser) and server (Node.js).
 Provides variable delta time that should be consumed by `FixedTicker` for deterministic game logic.

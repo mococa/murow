@@ -1,4 +1,4 @@
-import { LoopDriver } from "../loop";
+import { LoopDriver } from "../driver";
 
 /**
  * Server-side game loop driver using setImmediate.

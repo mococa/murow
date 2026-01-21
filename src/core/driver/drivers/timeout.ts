@@ -1,4 +1,4 @@
-import { LoopDriver } from "../loop";
+import { LoopDriver } from "../driver";
 
 /**
  * Minimal delay for setTimeout-based loop scheduling.

@@ -1,6 +1,6 @@
 import { describe, expect, test, beforeEach, afterEach } from "bun:test";
 import { RafDriver, ImmediateDriver, TimeoutDriver } from "./drivers";
-import { createDriver } from "./loop";
+import { createDriver } from "./driver";
 
 // Mock requestAnimationFrame for testing (Node.js doesn't have it)
 (() => {
@@ -41,7 +41,7 @@ import { createDriver } from "./loop";
   };
 })();
 
-describe("Loop", () => {
+describe("Driver", () => {
   describe("createDriver", () => {
     test("should create RafDriver for client type", () => {
       const driver = createDriver('client', () => {});
