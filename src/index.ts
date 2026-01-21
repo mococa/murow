@@ -26,3 +26,7 @@ export * from "./net";
 
 // Entity Component System
 export * from "./ecs";
+
+// Game utilities
+export * from "./game";
+
