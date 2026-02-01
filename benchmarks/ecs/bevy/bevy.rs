@@ -1,6 +1,20 @@
 use bevy::prelude::*;
 use std::time::Instant;
 
+#[derive(Debug)]
+struct BenchmarkMetrics {
+    avg: f32,
+    min: f32,
+    max: f32,
+    p50: f32,
+    p95: f32,
+    p99: f32,
+    std_dev: f32,
+    percent60: f32,
+    percent30: f32,
+    jank_score: u32,
+}
+
 // Define components matching Murow's benchmark
 #[derive(Component)]
 struct Transform2D {
@@ -242,7 +256,7 @@ fn ai_behavior_system(mut query: Query<&mut Velocity>, frame: Res<FrameCounter>)
     }
 }
 
-fn run_benchmark(entity_count: usize) -> (f32, f32, f32) {
+fn run_benchmark(entity_count: usize) -> BenchmarkMetrics {
     let mut app = App::new();
 
     // Initialize resources
@@ -347,11 +361,54 @@ fn run_benchmark(entity_count: usize) -> (f32, f32, f32) {
         frame_times.push(frame_time);
     }
 
+    // Calculate enhanced metrics
     let avg = frame_times.iter().sum::<f32>() / frame_times.len() as f32;
     let min = frame_times.iter().copied().fold(f32::INFINITY, f32::min);
     let max = frame_times.iter().copied().fold(f32::NEG_INFINITY, f32::max);
 
-    (avg, min, max)
+    // Calculate percentiles
+    let mut sorted = frame_times.clone();
+    sorted.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    let p50 = sorted[(sorted.len() as f32 * 0.50) as usize];
+    let p95 = sorted[(sorted.len() as f32 * 0.95) as usize];
+    let p99 = sorted[(sorted.len() as f32 * 0.99) as usize];
+
+    // Standard deviation
+    let variance = frame_times.iter()
+        .map(|&t| (t - avg).powi(2))
+        .sum::<f32>() / frame_times.len() as f32;
+    let std_dev = variance.sqrt();
+
+    // Frame budget analysis
+    let frames60fps = frame_times.iter().filter(|&&t| t <= 16.67).count();
+    let frames30fps = frame_times.iter().filter(|&&t| t <= 33.33).count();
+    let percent60 = (frames60fps as f32 / frame_times.len() as f32) * 100.0;
+    let percent30 = (frames30fps as f32 / frame_times.len() as f32) * 100.0;
+
+    // Jank score (consecutive slow frames)
+    let mut jank_score = 0u32;
+    let mut consecutive_slow = 0u32;
+    for &t in &frame_times {
+        if t > 33.33 {
+            consecutive_slow += 1;
+            jank_score += consecutive_slow;
+        } else {
+            consecutive_slow = 0;
+        }
+    }
+
+    BenchmarkMetrics {
+        avg,
+        min,
+        max,
+        p50,
+        p95,
+        p99,
+        std_dev,
+        percent60,
+        percent30,
+        jank_score,
+    }
 }
 
 fn main() {
@@ -360,35 +417,41 @@ fn main() {
 
     let entity_counts = [500, 1_000, 5_000, 10_000, 15_000, 25_000, 50_000, 100_000];
 
-    println!("| Entity Count | Avg Time | FPS | Min | Max |");
-    println!("|--------------|----------|-----|-----|-----|");
+    println!("| Entities | Avg   | P50   | P95   | P99   | Max   | StdDev | @60fps | @30fps | Jank |");
+    println!("|----------|-------|-------|-------|-------|-------|--------|--------|--------|------|");
 
     for count in entity_counts {
-        // Run 5 times and average
-        let mut all_avgs = Vec::new();
-        let mut all_mins = Vec::new();
-        let mut all_maxs = Vec::new();
+        // Run 5 times and collect all metrics
+        let mut runs = Vec::new();
 
         for run in 0..5 {
             eprintln!("  Run {}/{} for {} entities...", run + 1, 5, count);
-            let (avg, min, max) = run_benchmark(count);
-            all_avgs.push(avg);
-            all_mins.push(min);
-            all_maxs.push(max);
+            runs.push(run_benchmark(count));
         }
 
-        let final_avg = all_avgs.iter().sum::<f32>() / all_avgs.len() as f32;
-        let final_min = all_mins.iter().copied().fold(f32::INFINITY, f32::min);
-        let final_max = all_maxs.iter().copied().fold(f32::NEG_INFINITY, f32::max);
-        let fps = 1000.0 / final_avg;
+        // Average all metrics across runs
+        let avg_avg = runs.iter().map(|r| r.avg).sum::<f32>() / runs.len() as f32;
+        let avg_p50 = runs.iter().map(|r| r.p50).sum::<f32>() / runs.len() as f32;
+        let avg_p95 = runs.iter().map(|r| r.p95).sum::<f32>() / runs.len() as f32;
+        let avg_p99 = runs.iter().map(|r| r.p99).sum::<f32>() / runs.len() as f32;
+        let max_max = runs.iter().map(|r| r.max).fold(f32::NEG_INFINITY, f32::max);
+        let avg_std_dev = runs.iter().map(|r| r.std_dev).sum::<f32>() / runs.len() as f32;
+        let avg_percent60 = runs.iter().map(|r| r.percent60).sum::<f32>() / runs.len() as f32;
+        let avg_percent30 = runs.iter().map(|r| r.percent30).sum::<f32>() / runs.len() as f32;
+        let avg_jank = runs.iter().map(|r| r.jank_score).sum::<u32>() / runs.len() as u32;
 
         println!(
-            "| {:>12} | {:.2}ms | {:>3} | {:.2}ms | {:.2}ms |",
+            "| {:>8} | {:>5.2}ms | {:>5.2}ms | {:>5.2}ms | {:>5.2}ms | {:>5.2}ms | {:>6.2}ms | {:>5.0}% | {:>5.0}% | {:>4} |",
             count,
-            final_avg,
-            fps as u32,
-            final_min,
-            final_max
+            avg_avg,
+            avg_p50,
+            avg_p95,
+            avg_p99,
+            max_max,
+            avg_std_dev,
+            avg_percent60,
+            avg_percent30,
+            avg_jank
         );
     }
 }

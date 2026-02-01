@@ -71,7 +71,23 @@ class SimpleRng {
   }
 }
 
-function runBenchmark(entityCount: number): { avg: number; min: number; max: number } {
+interface BenchmarkMetrics {
+  avg: number;
+  min: number;
+  max: number;
+  p50: number;
+  p95: number;
+  p99: number;
+  stdDev: number;
+  percent60: number;
+  percent30: number;
+  jankScore: number;
+  heapUsedMB: number;
+}
+
+function runBenchmark(entityCount: number): BenchmarkMetrics {
+  const startMem = process.memoryUsage();
+
   const world = new World({
     maxEntities: entityCount,
     components: [
@@ -341,11 +357,43 @@ function runBenchmark(entityCount: number): { avg: number; min: number; max: num
     frameTimes.push(frameTime);
   }
 
+  // Calculate enhanced metrics
+  const endMem = process.memoryUsage();
+  const heapUsedMB = (endMem.heapUsed - startMem.heapUsed) / 1024 / 1024;
+
   const avg = frameTimes.reduce((a, b) => a + b, 0) / frameTimes.length;
   const min = Math.min(...frameTimes);
   const max = Math.max(...frameTimes);
 
-  return { avg, min, max };
+  // Calculate percentiles
+  const sorted = [...frameTimes].sort((a, b) => a - b);
+  const p50 = sorted[Math.floor(sorted.length * 0.50)]!;
+  const p95 = sorted[Math.floor(sorted.length * 0.95)]!;
+  const p99 = sorted[Math.floor(sorted.length * 0.99)]!;
+
+  // Standard deviation
+  const variance = frameTimes.reduce((sum, val) => sum + Math.pow(val - avg, 2), 0) / frameTimes.length;
+  const stdDev = Math.sqrt(variance);
+
+  // Frame budget analysis
+  const frames60fps = frameTimes.filter(t => t <= 16.67).length;
+  const frames30fps = frameTimes.filter(t => t <= 33.33).length;
+  const percent60 = (frames60fps / frameTimes.length) * 100;
+  const percent30 = (frames30fps / frameTimes.length) * 100;
+
+  // Jank score (consecutive slow frames)
+  let jankScore = 0;
+  let consecutiveSlow = 0;
+  frameTimes.forEach(t => {
+    if (t > 33.33) {
+      consecutiveSlow++;
+      jankScore += consecutiveSlow;
+    } else {
+      consecutiveSlow = 0;
+    }
+  });
+
+  return { avg, min, max, p50, p95, p99, stdDev, percent60, percent30, jankScore, heapUsedMB };
 }
 
 function main() {
@@ -354,30 +402,32 @@ function main() {
 
   const entityCounts = [500, 1_000, 5_000, 10_000, 15_000, 25_000, 50_000, 100_000];
 
-  console.log("| Entity Count | Avg Time | FPS | Min | Max |");
-  console.log("|--------------|----------|-----|-----|-----|");
+  console.log("| Entities | Avg   | P50   | P95   | P99   | Max   | StdDev | @60fps | @30fps | Jank | Heap  |");
+  console.log("|----------|-------|-------|-------|-------|-------|--------|--------|--------|------|-------|");
 
   for (const count of entityCounts) {
-    // Run 5 times and average
-    const allAvgs: number[] = [];
-    const allMins: number[] = [];
-    const allMaxs: number[] = [];
+    // Run 5 times and collect all metrics
+    const runs: BenchmarkMetrics[] = [];
 
     for (let run = 0; run < 5; run++) {
       console.error(`  Run ${run + 1}/5 for ${count} entities...`);
-      const { avg, min, max } = runBenchmark(count);
-      allAvgs.push(avg);
-      allMins.push(min);
-      allMaxs.push(max);
+      runs.push(runBenchmark(count));
     }
 
-    const finalAvg = allAvgs.reduce((a, b) => a + b, 0) / allAvgs.length;
-    const finalMin = Math.min(...allMins);
-    const finalMax = Math.max(...allMaxs);
-    const fps = Math.floor(1000 / finalAvg);
+    // Average all metrics across runs
+    const avgAvg = runs.reduce((sum, r) => sum + r.avg, 0) / runs.length;
+    const avgP50 = runs.reduce((sum, r) => sum + r.p50, 0) / runs.length;
+    const avgP95 = runs.reduce((sum, r) => sum + r.p95, 0) / runs.length;
+    const avgP99 = runs.reduce((sum, r) => sum + r.p99, 0) / runs.length;
+    const maxMax = Math.max(...runs.map(r => r.max));
+    const avgStdDev = runs.reduce((sum, r) => sum + r.stdDev, 0) / runs.length;
+    const avgPercent60 = runs.reduce((sum, r) => sum + r.percent60, 0) / runs.length;
+    const avgPercent30 = runs.reduce((sum, r) => sum + r.percent30, 0) / runs.length;
+    const avgJank = runs.reduce((sum, r) => sum + r.jankScore, 0) / runs.length;
+    const avgHeap = runs.reduce((sum, r) => sum + r.heapUsedMB, 0) / runs.length;
 
     console.log(
-      `| ${count.toString().padStart(12)} | ${finalAvg.toFixed(2)}ms | ${fps.toString().padStart(3)} | ${finalMin.toFixed(2)}ms | ${finalMax.toFixed(2)}ms |`
+      `| ${count.toString().padStart(8)} | ${avgAvg.toFixed(2).padStart(5)}ms | ${avgP50.toFixed(2).padStart(5)}ms | ${avgP95.toFixed(2).padStart(5)}ms | ${avgP99.toFixed(2).padStart(5)}ms | ${maxMax.toFixed(2).padStart(5)}ms | ${avgStdDev.toFixed(2).padStart(6)}ms | ${avgPercent60.toFixed(0).padStart(5)}% | ${avgPercent30.toFixed(0).padStart(5)}% | ${Math.round(avgJank).toString().padStart(4)} | ${avgHeap.toFixed(1).padStart(5)}MB |`
     );
   }
 }
