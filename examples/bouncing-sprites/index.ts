@@ -3,17 +3,15 @@ import {
   World,
   defineComponent,
   BinaryCodec,
-  createDriver,
-  FixedTicker,
-  lerp
+  lerp,
+  GameLoop,
 } from '../../src';
 
 
 namespace Components {
-  export const Transform = defineComponent('Transform', {
+  export const Position = defineComponent('Position', {
     x: BinaryCodec.f32,
     y: BinaryCodec.f32,
-    rotation: BinaryCodec.f32,
   });
 
   export const Velocity = defineComponent('Velocity', {
@@ -22,8 +20,12 @@ namespace Components {
   });
 
   export const Sprite = defineComponent('Sprite', {
-    textureId: BinaryCodec.u16, // Index into texture array
+    textureId: BinaryCodec.u8,
     scale: BinaryCodec.f32,
+  });
+
+  export const Health = defineComponent('Health', {
+    value: BinaryCodec.f32,
   });
 }
 
@@ -41,7 +43,7 @@ class PixiRenderer {
   textures: Texture[] = [];
 
   // Interpolation state
-  previousPositions: Map<number, { x: number; y: number; rotation: number }> = new Map();
+  previousPositions: Map<number, { x: number; y: number; }> = new Map();
 
   constructor() {
     this.app = new Application();
@@ -74,12 +76,11 @@ class PixiRenderer {
    * @param world ECS world to store previous state from
    */
   storePreviousState(world: World) {
-    for (const eid of world.query(Components.Transform)) {
-      const transform = world.get(eid, Components.Transform);
+    for (const eid of world.query(Components.Position)) {
+      const transform = world.get(eid, Components.Position);
       this.previousPositions.set(eid, {
         x: transform.x,
         y: transform.y,
-        rotation: transform.rotation,
       });
     }
   }
@@ -93,7 +94,7 @@ class PixiRenderer {
    * @param alpha Interpolation factor between ticks
    */
   render(world: World, alpha: number) {
-    for (const eid of world.query(Components.Transform, Components.Sprite)) {
+    for (const eid of world.query(Components.Position, Components.Sprite)) {
       let sprite = this.sprites.get(eid);
 
       // Create sprite if it doesn't exist
@@ -107,18 +108,16 @@ class PixiRenderer {
       }
 
       // Get current physics state
-      const transform = world.get(eid, Components.Transform);
+      const transform = world.get(eid, Components.Position);
 
       // Interpolate for smooth rendering
       const prev = this.previousPositions.get(eid);
       if (prev) {
         sprite.x = lerp(prev.x, transform.x, alpha);
         sprite.y = lerp(prev.y, transform.y, alpha);
-        sprite.rotation = lerp(prev.rotation, transform.rotation, alpha);
       } else {
         sprite.x = transform.x;
         sprite.y = transform.y;
-        sprite.rotation = transform.rotation;
       }
     }
   }
@@ -140,33 +139,55 @@ class PixiRenderer {
   }
 }
 
-const AMOUNT_OF_ENTITIES = 16_000;
+const AMOUNT_OF_ENTITIES = 1_000;
 
 /**
  * Game class with ECS simulation calling pixi rendering.
  */
-class Game {
+class Game extends GameLoop {
   world: World;
   renderer: PixiRenderer;
-  ticker: FixedTicker;
 
   constructor() {
+    super({
+      tickRate: 15,
+      type: 'client',
+      onRender: (_, alpha) => {
+        this.renderer.render(this.world, alpha);
+      },
+    });
+
+    const physicsTitle = document.querySelector("#info p[data-id='physics']");
+    if (physicsTitle) {
+      physicsTitle.textContent = physicsTitle.textContent.replace('%ticks%', this.options.tickRate.toString());
+    }
+
+    this.events.on('tick', ({ tick, deltaTime, input }) => {
+      this.renderer.storePreviousState(this.world);
+      this.world.runSystems(deltaTime);
+      this.renderer.cleanup(this.world);
+
+      if (tick % (this.options.tickRate * 2) === 0) {
+        const fpsEl = document.querySelector("#fps");
+        if (!fpsEl) return;
+
+        fpsEl.textContent = `FPS: ${this.fps.toFixed(2)} | Entities: ${this.world.getEntityCount()}`;
+      }
+
+      // hold space to spawn more entities
+      if (input.keys['Space']?.down) {
+        this.spawnEntities();
+      }
+    });
+
     // Setup ECS world
     this.world = new World({
-      maxEntities: AMOUNT_OF_ENTITIES + 100, // Extra buffer for despawned entities
+      maxEntities: AMOUNT_OF_ENTITIES * 100, // Extra buffer for entities that will spawn/despawn
       components: Object.values(Components),
     });
 
     // Setup Pixi renderer
     this.renderer = new PixiRenderer();
-
-    // Setup fixed ticker (15 ticks per second for deterministic physics)
-    this.ticker = new FixedTicker({
-      rate: 10,
-      onTick: (dt) => {
-        this.fixedUpdate(dt);
-      },
-    });
 
     // Register physics systems using ergonomic API
     this.setupSystems();
@@ -175,28 +196,65 @@ class Game {
     this.renderer.init().then(() => {
       this.spawnEntities();
       this.start();
+
+      const fpsEl = document.querySelector("#fps");
+      if (!fpsEl) return;
+      fpsEl.textContent = `FPS: ${this.fps.toFixed(2)} | Entities: ${this.world.getEntityCount()}`;
     });
   }
 
   setupSystems() {
+    // use this.input for systems that need input here
+
     // Movement system - updates position from velocity
     this.world
       .addSystem()
-      .query(Components.Transform, Components.Velocity)
+      .query(Components.Position, Components.Velocity)
       .fields([
         { transform: ['x', 'y'] },
         { velocity: ['vx', 'vy'] }
       ])
       .run((entity, deltaTime) => {
-        // Ergonomic way yay
         entity.transform_x += entity.velocity_vx * deltaTime;
         entity.transform_y += entity.velocity_vy * deltaTime;
+      });
 
-        // invert velocities if hitting bounds
-        const tx = entity.transform_x;
-        const ty = entity.transform_y;
-        if (tx <= 0 || tx >= WIDTH) entity.velocity_vx *= -1;
-        if (ty <= 0 || ty >= HEIGHT) entity.velocity_vy *= -1;
+    // Bounce system - inverts velocity when hitting bounds
+    this.world
+      .addSystem()
+      .query(Components.Position, Components.Velocity)
+      .fields([
+        { transform: ['x', 'y'] },
+        { velocity: ['vx', 'vy'] }
+      ])
+      .when((entity) => {
+        return (
+          entity.transform_x <= 0 ||
+          entity.transform_x >= WIDTH ||
+          entity.transform_y <= 0 ||
+          entity.transform_y >= HEIGHT
+        );
+      })
+      .run((entity) => {
+        entity.velocity_vx *= -1;
+        entity.velocity_vy *= -1;
+      });
+
+    // Health decay system
+    this.world.addSystem()
+      .query(Components.Health)
+      .fields([{ health: ['value'] }])
+      .run((entity, deltaTime) => {
+        entity.health_value -= 10 * deltaTime;
+      });
+
+    // Despawn system
+    this.world.addSystem()
+      .query(Components.Health)
+      .fields([{ health: ['value'] }])
+      .when((entity) => entity.health_value <= 0)
+      .run((entity) => {
+        entity.despawn();
       });
   }
 
@@ -206,10 +264,12 @@ class Game {
       const eid = this.world.spawn();
 
       this.world.entity(eid)
-        .add(Components.Transform, {
+        .add(Components.Health, {
+          value: 10 + Math.floor(Math.random() * 90),
+        })
+        .add(Components.Position, {
           x: Math.random() * WIDTH,
           y: Math.random() * HEIGHT,
-          rotation: 0,
         })
         .add(Components.Velocity, {
           vx: (Math.random() - 0.5) * 100,
@@ -220,32 +280,6 @@ class Game {
           scale: 0.02 + Math.random() * 0.08,
         });
     }
-  }
-
-  fixedUpdate(deltaTime: number) {
-    // Store previous state before physics updates
-    this.renderer.storePreviousState(this.world);
-
-    // Run systems at fixed rate (Updates physics)
-    this.world.runSystems(deltaTime);
-
-    // Clean up despawned entities every 5 seconds
-    if (this.ticker.tickCount % (this.ticker.rate * 5) === 0) {
-      this.renderer.cleanup(this.world);
-    }
-  }
-
-  start() {
-    // Create client loop driver (uses requestAnimationFrame)
-    const driver = createDriver('client', (dt: number) => {
-      // Accumulate time and run fixed ticks as needed
-      this.ticker.tick(dt);
-
-      // Render with interpolation using alpha
-      this.renderer.render(this.world, this.ticker.alpha);
-    });
-
-    driver.start();
   }
 }
 
