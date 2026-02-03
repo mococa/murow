@@ -115,6 +115,7 @@ export class GameLoop<T extends DriverType = DriverType> {
      */
     stop() {
         this._driver.stop();
+        this.ticker.resetTickCount();
         this.events.emit('stop', { stoppedAt: Date.now() });
 
         if (this.options.type === 'client') {
