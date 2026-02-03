@@ -127,6 +127,7 @@ export class FixedTicker {
    */
   resetTickCount(): void {
     this._tickCount = 0;
+    this.accumulator = 0;
   }
 
   /**
