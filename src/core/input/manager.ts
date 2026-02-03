@@ -1,129 +1,131 @@
-import type { ButtonState, InputEventSource, InputHandlers, InputSnapshot } from "./types";
+import type {
+    ButtonState,
+    InputEventSource,
+    InputHandlers,
+        InputSnapshot,
+    } from "./types";
 
-/**
- * Manages input state for keyboard and mouse.
- * Listens to input events from a specified source
- * and provides snapshots of the current input state.
+    /**
+     * Manages keyboard and mouse input.
+     *
+     * Design goals:
+     * - Zero allocations per frame/tick
+     * - Render reads live state (peek)
+     * - Simulation reads frozen state (snapshot)
+ * - Deterministic hit/release semantics
  */
 export class InputManager {
-    private keys: Record<string, ButtonState> = {};
+    private keys: Record<string, ButtonState> = Object.create(null);
+    private prevKeys: Record<string, boolean> = Object.create(null);
+
     private mouse = {
-        x: 0, y: 0, dx: 0, dy: 0,
-        left: false, right: false, middle: false, scrollDelta: { x: 0, y: 0 },
+        x: 0,
+        y: 0,
+        dx: 0,
+        dy: 0,
+        left: false,
+        right: false,
+        middle: false,
+        scrollX: 0,
+        scrollY: 0,
     };
-    private prevKeys: Record<string, boolean> = {};
-    private prevMouse = { left: false, right: false, middle: false };
+
+    private prevMouse = {
+        left: false,
+        right: false,
+        middle: false,
+    };
+
+    private snapshotA: InputSnapshot;
+    private snapshotB: InputSnapshot;
+    private snapshotFlip = false;
+    private inputSource!: InputEventSource;
+
     private handlers: InputHandlers = {
-        keydown: (e: KeyboardEvent) => this.onKeyDown(e),
-        keyup: (e: KeyboardEvent) => this.onKeyUp(e),
-        mousemove: (e: MouseEvent) => this.onMouseMove(e),
-        mousedown: (e: MouseEvent) => this.onMouseDown(e),
-        mouseup: (e: MouseEvent) => this.onMouseUp(e),
-        wheel: (e: WheelEvent) => this.onMouseWheel(e),
-        swipe: (direction: 'up' | 'down' | 'left' | 'right') => this.onSwipe(direction),
-        pinch: (scale: number) => this.onPinch(scale),
+        keydown: (e) => this.onKeyDown(e),
+        keyup: (e) => this.onKeyUp(e),
+        mousemove: (e) => this.onMouseMove(e),
+        mousedown: (e) => this.onMouseDown(e),
+        mouseup: (e) => this.onMouseUp(e),
+        wheel: (e) => this.onMouseWheel(e),
+        swipe: (dir) => this.onSwipe(dir),
+        pinch: (scale) => this.onPinch(scale),
     };
-    private inputSource: InputEventSource;
 
-    /**
-     * Peeks at the current input state without modifying it.
-     * Useful for checking input state without affecting hit/release detection.
-     * 
-     * @returns A snapshot of the current input state.
-     */
-    peek(): InputSnapshot {
-        const keys: Record<string, ButtonState> = {};
-
-        for (const k in this.keys) {
-            const now = this.keys[k].down;
-            keys[k] = { down: now, hit: false, released: false };
-        }
-
-        return {
-            mouse: {
-                position: { x: this.mouse.x, y: this.mouse.y },
-                delta: {
-                    position: { x: this.mouse.dx, y: this.mouse.dy },
-                    scroll: { x: this.mouse.scrollDelta.x, y: this.mouse.scrollDelta.y },
-                },
-                left: { down: this.mouse.left, hit: false, released: false },
-                right: { down: this.mouse.right, hit: false, released: false },
-                middle: { down: this.mouse.middle, hit: false, released: false },
-            },
-            keys,
-        };
+    constructor() {
+        this.snapshotA = createEmptySnapshot();
+        this.snapshotB = createEmptySnapshot();
     }
 
     /**
-     * Takes a snapshot of the current input state
-     * and returns it. Also updates internal state
-     * to prepare for the next snapshot.
+     * Returns a live, non-allocating view of the current input state.
      *
-     * @returns InputSnapshot of current input state 
+     * - No hit/release detection
+     * - No resets
+     * - Safe for render passes
+     */
+    peek(): Readonly<InputSnapshot> {
+        const snap = this.snapshotFlip ? this.snapshotA : this.snapshotB;
+        fillLiveView(snap, this.keys, this.mouse);
+        return snap;
+    }
+
+    /**
+     * Produces a frozen snapshot of the input state.
+     *
+     * - Computes hit/release
+     * - Resets deltas
+     * - Safe to store for the duration of the tick
      */
     snapshot(): InputSnapshot {
-        const keys: Record<string, ButtonState> = {};
+        const snap = this.snapshotFlip ? this.snapshotA : this.snapshotB;
+        this.snapshotFlip = !this.snapshotFlip;
 
-        for (const k in this.keys) {
-            const now = this.keys[k].down;
-            const prev = this.prevKeys[k] ?? false;
+        fillSnapshot(
+            snap,
+            this.keys,
+            this.prevKeys,
+            this.mouse,
+            this.prevMouse
+        );
 
-            keys[k] = {
-                down: now,
-                hit: now && !prev,
-                released: !now && prev,
-            };
+        this.mouse.dx = 0;
+        this.mouse.dy = 0;
+        this.mouse.scrollX = 0;
+        this.mouse.scrollY = 0;
 
-            this.prevKeys[k] = now;
-        }
-
-        const left = this.mouse.left;
-
-        const snapshot: InputSnapshot = {
-            mouse: {
-                position: { x: this.mouse.x, y: this.mouse.y },
-                delta: {
-                    position: { x: this.mouse.dx, y: this.mouse.dy },
-                    scroll: { x: this.mouse.scrollDelta.x, y: this.mouse.scrollDelta.y },
-                },
-                left: button(this.mouse.left, this.prevMouse.left),
-                right: button(this.mouse.right, this.prevMouse.right),
-                middle: button(this.mouse.middle, this.prevMouse.middle),
-            },
-            keys,
-        };
-
-        this.mouse.dx = this.mouse.dy = 0;
-        this.prevMouse.left = left;
+        this.prevMouse.left = this.mouse.left;
         this.prevMouse.right = this.mouse.right;
         this.prevMouse.middle = this.mouse.middle;
-        this.mouse.scrollDelta.x = this.mouse.scrollDelta.y = 0;
 
-        return snapshot;
+        return snap;
     }
 
-    listen(inputSource: InputEventSource) {
-        if (this.inputSource) {
-            this.inputSource.detach();
-        }
-
-        this.inputSource = inputSource;
-        this.inputSource.attach(this.handlers);
+    /**
+     * Starts listening to an input event source
+     */
+    listen(source: InputEventSource) {
+        if (this.inputSource) this.inputSource.detach();
+        this.inputSource = source;
+        source.attach(this.handlers);
     }
 
+    /**
+     * Stops listening to the current input source.
+     */
     unlisten() {
         if (!this.inputSource) return;
         this.inputSource.detach();
     }
 
     private onKeyDown(e: KeyboardEvent) {
-        this.keys[e.code] = this.keys[e.code] || { down: false, hit: false, released: false };
-        this.keys[e.code].down = true;
+        const key = (this.keys[e.code] ??= { down: false, hit: false, released: false });
+        key.down = true;
     }
 
     private onKeyUp(e: KeyboardEvent) {
-        this.keys[e.code] = this.keys[e.code] || { down: false, hit: false, released: false };
-        this.keys[e.code].down = false;
+        const key = (this.keys[e.code] ??= { down: false, hit: false, released: false });
+        key.down = false;
     }
 
     private onMouseMove(e: MouseEvent) {
@@ -151,23 +153,107 @@ export class InputManager {
     }
 
     private onMouseWheel(e: WheelEvent) {
-        this.mouse.scrollDelta.x += e.deltaX;
-        this.mouse.scrollDelta.y += e.deltaY;
+        this.mouse.scrollX += e.deltaX;
+        this.mouse.scrollY += e.deltaY;
     }
 
-    private onSwipe(direction: 'up' | 'down' | 'left' | 'right') {
-        // TODO: Implement swipe handling
+    private onSwipe(_dir: "up" | "down" | "left" | "right") {
+        // Gesture layer lives above core input
     }
 
-    private onPinch(scale: number) {
-        // TODO: Implement pinch handling
+    private onPinch(_scale: number) {
+        // Gesture layer lives above core input
     }
 }
 
-function button(now: boolean, prev: boolean): ButtonState {
+/**
+ * Creates a reusable, fully-initialized snapshot object.
+ */
+function createEmptySnapshot(): InputSnapshot {
     return {
-        down: now,
-        hit: now && !prev,
-        released: !now && prev,
+        mouse: {
+            position: { x: 0, y: 0 },
+            delta: {
+                position: { x: 0, y: 0 },
+                scroll: { x: 0, y: 0 },
+            },
+            left: { down: false, hit: false, released: false },
+            right: { down: false, hit: false, released: false },
+            middle: { down: false, hit: false, released: false },
+        },
+        keys: Object.create(null),
     };
+}
+
+/**
+ * Fills a snapshot with live input state.
+ * No hit/release, no resets.
+ */
+function fillLiveView(
+    snap: InputSnapshot,
+    keys: Record<string, ButtonState>,
+    mouse: InputManager["mouse"]
+) {
+    for (const k in keys) {
+        const dst = (snap.keys[k] ??= { down: false, hit: false, released: false });
+        dst.down = keys[k].down;
+        dst.hit = false;
+        dst.released = false;
+    }
+
+    snap.mouse.position.x = mouse.x;
+    snap.mouse.position.y = mouse.y;
+    snap.mouse.delta.position.x = mouse.dx;
+    snap.mouse.delta.position.y = mouse.dy;
+    snap.mouse.delta.scroll.x = mouse.scrollX;
+    snap.mouse.delta.scroll.y = mouse.scrollY;
+
+    snap.mouse.left.down = mouse.left;
+    snap.mouse.right.down = mouse.right;
+    snap.mouse.middle.down = mouse.middle;
+
+    snap.mouse.left.hit = snap.mouse.left.released = false;
+    snap.mouse.right.hit = snap.mouse.right.released = false;
+    snap.mouse.middle.hit = snap.mouse.middle.released = false;
+}
+
+/**
+ * Fills a snapshot with frozen input state.
+ * Computes hit/release and updates previous state.
+ */
+function fillSnapshot(
+    snap: InputSnapshot,
+    keys: Record<string, ButtonState>,
+    prevKeys: Record<string, boolean>,
+    mouse: InputManager["mouse"],
+    prevMouse: InputManager["prevMouse"]
+) {
+    for (const k in keys) {
+        const now = keys[k].down;
+        const prev = prevKeys[k] ?? false;
+
+        const dst = (snap.keys[k] ??= { down: false, hit: false, released: false });
+        dst.down = now;
+        dst.hit = now && !prev;
+        dst.released = !now && prev;
+
+        prevKeys[k] = now;
+    }
+
+    snap.mouse.position.x = mouse.x;
+    snap.mouse.position.y = mouse.y;
+    snap.mouse.delta.position.x = mouse.dx;
+    snap.mouse.delta.position.y = mouse.dy;
+    snap.mouse.delta.scroll.x = mouse.scrollX;
+    snap.mouse.delta.scroll.y = mouse.scrollY;
+
+    applyButton(snap.mouse.left, mouse.left, prevMouse.left);
+    applyButton(snap.mouse.right, mouse.right, prevMouse.right);
+    applyButton(snap.mouse.middle, mouse.middle, prevMouse.middle);
+}
+
+function applyButton(dst: ButtonState, now: boolean, prev: boolean) {
+    dst.down = now;
+    dst.hit = now && !prev;
+    dst.released = !now && prev;
 }

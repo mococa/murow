@@ -33,8 +33,8 @@ export type InputSnapshot = {
     mouse: {
         position: Vector2;
         delta: { position: Vector2, scroll: Vector2 };
-        left: boolean | ButtonState;
-        middle: boolean | ButtonState;
-        right: boolean | ButtonState;
+        left: ButtonState;
+        middle: ButtonState;
+        right: ButtonState;
     };
 };
