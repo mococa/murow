@@ -33,6 +33,25 @@ export type InferIntentType<K extends number, S extends Record<string, any>> = {
 };
 
 /**
+ * Helper type to extract just the data fields from a DefinedIntent (excluding kind and tick).
+ * This is useful for APIs that work with intent data without the metadata fields.
+ *
+ * @example
+ * ```ts
+ * const MoveIntent = defineIntent({
+ *   kind: 1,
+ *   schema: { vx: BinaryCodec.f32, vy: BinaryCodec.f32 }
+ * });
+ *
+ * type MoveData = IntentDataOnly<typeof MoveIntent>; // { vx: number, vy: number }
+ * ```
+ */
+export type IntentDataOnly<T> =
+  T extends DefinedIntent<infer _K, infer U extends Intent>
+    ? Omit<U, 'kind' | 'tick'>
+    : never;
+
+/**
  * Result of defineIntent - provides both the type and codec.
  * @template K The intent kind literal
  * @template T The inferred intent type
