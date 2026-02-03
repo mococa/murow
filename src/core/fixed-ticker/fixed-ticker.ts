@@ -14,7 +14,7 @@
  */
 export class FixedTicker {
   /**
-   * @description Accumulator for the time passed since the last tick
+   * @description Accumulator for the time passed since the last tick (in milliseconds)
    */
   private accumulator = 0;
 
@@ -77,8 +77,12 @@ export class FixedTicker {
 
     let ticks = 0;
 
+    // Use a small epsilon relative to interval to handle floating point precision errors
+    // Without this, accumulator might be 0.9999999 when it should be 1.0
+    const epsilon = this.intervalMs * 0.001;
+
     while (
-      this.accumulator >= this.intervalMs &&
+      this.accumulator >= this.intervalMs - epsilon &&
       ticks < this.maxTicksPerFrame
     ) {
       this.accumulator -= this.intervalMs;
