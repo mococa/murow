@@ -21,6 +21,10 @@ export class GameLoop<T extends DriverType = DriverType> {
      * Current frames per second (FPS) measurement.
      */
     fps: number = 0;
+    /**
+     * Current status of the game loop: 'running', 'paused', or 'stopped'.
+     */
+    status: 'running' | 'paused' | 'stopped' = 'stopped';
 
     constructor(public options: GameLoopOptions & { type: T }) {
         const eventNames = [
@@ -78,6 +82,7 @@ export class GameLoop<T extends DriverType = DriverType> {
      */
     pause() {
         this._driver.stop();
+        this.status = 'paused';
         this.events.emit('toggle-pause', {
             paused: true,
             lastToggledAt: Date.now(),
@@ -90,6 +95,7 @@ export class GameLoop<T extends DriverType = DriverType> {
      */
     resume() {
         this._driver.start();
+        this.status = 'running';
         this.events.emit('toggle-pause', {
             paused: false,
             lastToggledAt: Date.now(),
@@ -102,6 +108,7 @@ export class GameLoop<T extends DriverType = DriverType> {
      */
     start() {
         this._driver.start();
+        this.status = 'running';
         this.events.emit('start', { startedAt: Date.now() });
 
         if (this.options.type === 'client') {
@@ -116,6 +123,7 @@ export class GameLoop<T extends DriverType = DriverType> {
     stop() {
         this._driver.stop();
         this.ticker.resetTickCount();
+        this.status = 'stopped';
         this.events.emit('stop', { stoppedAt: Date.now() });
 
         if (this.options.type === 'client') {
