@@ -28,6 +28,15 @@ import { FixedTicker } from 'murow/core';
 
 ## Modules
 
+### Entity Component System (ECS)
+
+High-performance ECS with **SoA (Structure of Arrays)** storage, bitmask queries, and zero-allocation hot paths:
+- `World`: Manages entities and components
+- `defineComponent`: Define typed components with binary schemas
+- `EntityHandle`: Fluent chainable entity API
+
+See [ECS Documentation](./src/ecs/README.md) for full usage.
+
 ### Core Utilities
 - `FixedTicker`: Deterministic fixed-rate update loop
 - `EventSystem`: High-performance event handling
