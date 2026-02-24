@@ -4,7 +4,7 @@ A high-performance Entity Component System for multiplayer games, built on typed
 
 ## Features
 
-- **Typed Array Storage**: Components stored in packed ArrayBuffer with DataView for cache-friendly iteration
+- **SoA Storage**: Components stored using Structure of Arrays (SoA) — one TypedArray per field — for cache-friendly field iteration and SIMD-friendly access
 - **Zero Allocations**: Reusable DataView and ObjectPool eliminate GC pressure
 - **BinaryCodec Integration**: Components use your existing schema definitions
 - **PooledCodec Serialization**: Efficient network encoding built-in
@@ -12,6 +12,31 @@ A high-performance Entity Component System for multiplayer games, built on typed
 - **Unlimited Components**: Dynamically scales to support any number of components (32 per bitmask word)
 - **Optimized Hot Paths**: Cached references and unrolled loops for <128 component common case
 - **Simple API**: Define components, spawn entities, query and update
+
+## Memory Layout: SoA (Structure of Arrays)
+
+Murow ECS uses **SoA (Structure of Arrays)**, not AoS (Array of Structures).
+
+Each component field is stored in its own dedicated TypedArray indexed by entity ID:
+
+```
+// AoS (NOT what murow does):
+// [ { x, y, rotation }, { x, y, rotation }, ... ]
+
+// SoA (what murow does):
+// transformX:        Float32Array [ x0, x1, x2, ... ]
+// transformY:        Float32Array [ y0, y1, y2, ... ]
+// transformRotation: Float32Array [ r0, r1, r2, ... ]
+```
+
+**Tradeoffs vs AoS:**
+- ✅ Faster single-field access across many entities (e.g. reading all `x` values)
+- ✅ Better for vectorized / SIMD-style processing on individual fields
+- ✅ Native TypedArray operations without byte-level arithmetic
+- ❌ Whole-component reads require touching multiple arrays (more cache lines)
+- ❌ Slightly more memory overhead per component (one TypedArray header per field)
+
+Use `world.getFieldArray(Component, 'fieldName')` to get direct typed array access for the most performance-critical loops.
 
 ## Quick Start
 
