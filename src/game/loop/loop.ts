@@ -67,11 +67,13 @@ export class GameLoop<T extends DriverType = DriverType> {
             this.fps = 1 / dt;
 
             if (this.options.type === 'client') {
-                this.options.onRender?.(dt, this.ticker.alpha, this._input.peek());
+                const peek = this._input.peek();
+
+                this.options.onRender?.(dt, this.ticker.alpha, peek);
                 this.events.emit('render', {
                     deltaTime: dt,
                     alpha: this.ticker.alpha,
-                    input: this._input.peek(),
+                    input: peek,
                 });
             }
         });
