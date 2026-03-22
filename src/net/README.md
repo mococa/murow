@@ -69,7 +69,7 @@ Transport-agnostic networking layer for multiplayer games. Provides generic clie
 ### 1. Define Your Game Protocol
 
 ```typescript
-import { BinaryCodec, defineIntent, IntentRegistry, SnapshotRegistry } from '@mococa/gamedev-utils';
+import { BinaryCodec, defineIntent, IntentRegistry, SnapshotRegistry } from 'murow';
 
 // Define intents (client -> server)
 enum IntentKind {
@@ -99,7 +99,7 @@ const GameStateCodec = BinaryCodec.object({
 ### 2. Create Server
 
 ```typescript
-import { ServerNetwork, BunWebSocketServerTransport } from '@mococa/gamedev-utils';
+import { ServerNetwork, BunWebSocketServerTransport } from 'murow';
 
 // Create transport
 const transport = BunWebSocketServerTransport.create(3000);
@@ -139,7 +139,7 @@ setInterval(() => {
 ### 3. Create Client
 
 ```typescript
-import { ClientNetwork, BunWebSocketClientTransport } from '@mococa/gamedev-utils';
+import { ClientNetwork, BunWebSocketClientTransport } from 'murow';
 
 // Connect to server
 const transport = await BunWebSocketClientTransport.connect('ws://localhost:3000');
@@ -181,7 +181,7 @@ For one-off events that don't fit intents (inputs) or snapshots (state sync), us
 ### Quick Example
 
 ```typescript
-import { defineRPC, RpcRegistry } from '@mococa/gamedev-utils';
+import { defineRPC, RpcRegistry } from 'murow';
 
 // Define RPCs
 const MatchCountdown = defineRPC({
@@ -306,7 +306,7 @@ server.onConnection((peerId) => {
 Implement the `TransportAdapter` interface:
 
 ```typescript
-import { TransportAdapter, ServerTransportAdapter } from '@mococa/net';
+import { TransportAdapter, ServerTransportAdapter } from 'murow/net';
 
 // Client-side transport
 class MyTransport implements TransportAdapter {
