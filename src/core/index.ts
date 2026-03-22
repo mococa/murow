@@ -8,3 +8,4 @@ export * from './navmesh';
 export * from './pooled-codec';
 export * from './prediction';
 export * from './input';
+export * from './free-list';
